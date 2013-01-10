@@ -1,0 +1,11 @@
+[i=0]
+[#Prog while: #true do:
+'[{()
+	[i := [i add: 1]]
+	[[i gt: 10] if: '[#Prog break: #nil]]
+	[[i equals: 7] if: '[#Prog continue]]
+	[i print]
+	["\n" print]
+} eval: ()
+]
+]

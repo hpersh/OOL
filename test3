@@ -1,0 +1,6 @@
+
+[s = [#Socket new]]
+[s bind: 0]
+[s connect: ("98.139.183.24" 80)]
+[s send: "GET http://www.yahoo.com/index.html HTTP/1.1\r\n"]
+[r = [s recv: 1000]]

@@ -1,0 +1,2 @@
+[#Environment at: 'f put: [[[#Integer instance-methods] at: "add:"] cdr]]
+[f eval: (1 2)]

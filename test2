@@ -1,0 +1,52 @@
+[[#Object instance-methods] at: 'dump put:
+	{(self)
+		[[[self instance-of] instance-variables] foreach:
+			{(v) [v print]
+			     ["=" print]
+			     [[[#Method-Call new: ('self v)] eval] print]
+			     ["\n" print]
+			}
+		]
+		#nil
+	}
+]
+
+// Factorial
+[[#Integer instance-methods] at: 'fac put:
+	{(self)
+		 [[self equals: 0] if: 1 else: '[self mult: [[self add: -1] fac]]]
+	}
+]
+
+// GCD
+[[#Integer instance-methods] at: "gcd:" put:
+	{(a b)
+		[[b gt: a] if: '[b gcd: a] else:
+			'[[b equals: 0] if: 'a else:
+				'[b gcd: [a mod: b]]
+			]
+		]
+	}
+]
+
+
+[#Metaclass new: "Point" parent: #Object instance-variables: '(x y)]
+[[Point instance-methods] at: 'tostring put:
+	 {(self) [([self x] [self y]) tostring]}
+	 ]
+[[Point instance-methods] at: "add:" put:
+	 {(self p)
+	  [result = [Point new]]
+	  [result x: [[self x] add: [p x]]]
+	  [result y: [[self y] add: [p y]]]
+	  result
+	  }
+	  ]
+[#Environment at: 'p1 put: [Point new]]
+[#Environment at: 'p2 put: [Point new]]
+[p1 x: 1]
+[p1 y: 2]
+[p2 x: 13]
+[p2 y: 42]
+[p1 add: p2]
+

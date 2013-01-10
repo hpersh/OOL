@@ -1,0 +1,35 @@
+* TODO
+
+- separate dptr, pair and list
+- use GNU autobuild
+- load init tbls, then unload
+- avoiding duplicate strings?
+- readline
+- infinite-range integers
+- cleaner root-set interface for modules
+- module name hierarchy
+- complete methods
+- get rid of class constants, replace with env lookups
+- alloc/init split
+- unevalled args?
+- inst_of(Metaclass) == NIL... ?
+- constants
+  - names starting with #
+  - names in env, inst vars
+- Set class
+- Program class
+  - while:do:
+- macros
+  - eval method, then eval result
+  - {{ }} syntax?
+  - class Macro, derived from Block?
+  - macros need unaevalled args?
+- error checking
+  - # of args, arg type
+- error handling
+  - distinguish parse error from EOF
+    - use flex EOF rule 
+  - recovery
+- cleanup
+  - forward declarations
+  - refactoring, e.g. common code
