@@ -678,6 +678,14 @@ uninstall-am: uninstall-binPROGRAMS
 	uninstall-am uninstall-binPROGRAMS
 
 
+#pkglib_LTLIBRARIES = socket.la math.la
+
+#socket_la_SOURCES = socket.c
+#socket_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+
+#math_la_SOURCES = math.c
+#math_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.
 .NOEXPORT:

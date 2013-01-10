@@ -13,6 +13,7 @@ AC_PROG_YACC
 AM_PROG_LEX
 
 # Checks for libraries.
+#LT_INIT([dlopen])
 
 # Checks for header files.
 AC_FUNC_ALLOCA

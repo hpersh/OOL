@@ -1,4 +1,4 @@
-aclocal
-autoheader
-automake --add-missing
-autoconf
+aclocal --verbose
+autoheader --verbose
+automake --verbose --add-missing
+autoconf --verbose

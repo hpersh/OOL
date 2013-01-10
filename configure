@@ -4029,6 +4029,7 @@ if test "$LEX" = :; then
 fi
 
 # Checks for libraries.
+#LT_INIT([dlopen])
 
 # Checks for header files.
 ac_ext=c
