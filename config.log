@@ -133,11 +133,11 @@ configure:3943: checking lex output file root
 configure:3957: result: lex.yy
 configure:3962: checking lex library
 configure:3976: gcc -o conftest -g -O2   conftest.c   >&5
-/tmp/ccaZscg0.o: In function `input':
+/tmp/ccEf1TGn.o: In function `input':
 /home/hpersh/Downloads/ool6/lex.yy.c:1183: undefined reference to `yywrap'
-/tmp/ccaZscg0.o: In function `yylex':
+/tmp/ccEf1TGn.o: In function `yylex':
 /home/hpersh/Downloads/ool6/lex.yy.c:882: undefined reference to `yywrap'
-/tmp/ccaZscg0.o: In function `main':
+/tmp/ccEf1TGn.o: In function `main':
 /home/hpersh/Downloads/ool6/conftest.l:18: undefined reference to `yywrap'
 collect2: error: ld returned 1 exit status
 configure:3976: $? = 1
