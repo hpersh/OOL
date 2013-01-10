@@ -70,7 +70,7 @@ am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_ool_OBJECTS = grammar.$(OBJEXT) scanner.$(OBJEXT) ool.$(OBJEXT)
 ool_OBJECTS = $(am_ool_OBJECTS)
-ool_LDADD = $(LDADD)
+ool_DEPENDENCIES =
 DEFAULT_INCLUDES = -I.@am__isrc@
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__depfiles_maybe = depfiles
@@ -107,6 +107,7 @@ am__distuninstallcheck_listfiles = $(distuninstallcheck_listfiles) \
   | sed 's|^\./|$(prefix)/|' | grep -v '$(infodir)/dir$$'
 distcleancheck_listfiles = find . -type f -print
 ACLOCAL = @ACLOCAL@
+ALLOCA = @ALLOCA@
 AMTAR = @AMTAR@
 AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
@@ -125,7 +126,6 @@ ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
 EGREP = @EGREP@
 EXEEXT = @EXEEXT@
-FLEX = @FLEX@
 GREP = @GREP@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
@@ -199,8 +199,9 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 ool_SOURCES = grammar.y scanner.l ool.c
-AM_CFLAGS = -DDEBUG
+AM_CFLAGS = -g -DDEBUG
 AM_YFLAGS = -d -t
+ool_LDADD = -ldl
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -676,10 +677,6 @@ uninstall-am: uninstall-binPROGRAMS
 	mostlyclean-generic pdf pdf-am ps ps-am tags uninstall \
 	uninstall-am uninstall-binPROGRAMS
 
-
-#lib_PROGRAMS	= socket math
-#socket_SOURCES	= socket.c
-#math_SOURCES	= math.c
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.
