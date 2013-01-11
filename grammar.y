@@ -10,8 +10,6 @@
 extern char *yytext;
 extern int  yyleng;
 
-void list_concat(obj_t li, obj_t obj);
-
 %}
 
 %token TOK_QUOTE
@@ -43,7 +41,7 @@ decnum:
     sscanf(yytext, "%lld", &val);
     integer_new(0, val);
 
-    VM_PUSH(R0);                /* Just for keeping a reference while parsing */
+    vm_push(0);                /* Just for keeping a reference while parsing */
     $$ = R0;
 }
 
@@ -55,7 +53,7 @@ hexnum:
     sscanf(yytext, "%llx", &val);
     integer_new(0, val);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 
@@ -67,7 +65,7 @@ floatnum:
     sscanf(yytext, "%Lf", &val);
     float_new(0, val);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 	;
@@ -77,7 +75,7 @@ csym:
 {
     string_new(0, 1, yyleng, yytext);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 
@@ -113,16 +111,16 @@ qstr:
         --size;
     }
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     string_new(1, 1, size, yytext + 1);
     cons(2, consts.cl.list, consts.str.quote, NIL);
     cons(1, consts.cl.list, R1, R2);
     method_call_new(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 
@@ -131,7 +129,7 @@ sym:
 {
     string_new(0, 1, yyleng, yytext);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 
@@ -140,58 +138,58 @@ seln:
 {
     string_new(0, 1, yyleng, yytext);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 
 atom:
         decnum
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | hexnum
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | floatnum
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | sym
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | csym
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | seln
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | qstr
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -201,7 +199,7 @@ pair:
 {
     cons(0, consts.cl.pair, $2, $4);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 	;
@@ -211,16 +209,16 @@ list_exprs_1:
 {
     list_concat($1, $2);
 
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | expr
 {
     cons(0, consts.cl.list, $1, NIL);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -228,14 +226,14 @@ list_exprs_1:
 list:
         TOK_LPAREN list_exprs_1 TOK_RPAREN
 {
-    VM_ASSIGN(R0, $2);
+    vm_assign(0, $2);
     
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | TOK_LPAREN TOK_RPAREN
 {
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
     
     $$ = R0;
 }
@@ -246,29 +244,28 @@ method_call_sel_and_args:
 {
     obj_t p, q;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     cons(2, consts.cl.list, $3, NIL);
     cons(1, consts.cl.list, $2, R2);
-    for (p = $1; q = CDR(p); p = q);
-    VM_ASSIGN(CDR(p), R1);
-    VM_ASSIGN(R0, $1);
+    _list_concat($1, R1);
+    vm_assign(0, $1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | seln expr
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     cons(1, consts.cl.list, $2, NIL);
     cons(0, consts.cl.list, $1, R1);
 
-    VM_POP(R1);
+    vm_pop(1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -276,7 +273,7 @@ method_call_sel_and_args:
 method_call:
 	TOK_LSQBR sym TOK_EQUAL expr TOK_RSQBR
 {
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     cons(1, consts.cl.list, $4, NIL);
     string_new(2, 1, 6, "value:");
@@ -290,14 +287,14 @@ method_call:
     cons(1, consts.cl.list, consts.str.Environment, R1);
     method_call_new(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
     
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
 	| TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
 {
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     cons(1, consts.cl.list, $4, NIL);
     string_new(2, 1, 4, "put:");
@@ -311,34 +308,34 @@ method_call:
     cons(1, consts.cl.list, consts.str.Environment, R1);
     method_call_new(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
     
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | TOK_LSQBR expr sym TOK_RSQBR
 {
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
     
     cons(2, consts.cl.list, $3, NIL);
     cons(1, consts.cl.list, $2, R2);
     method_call_new(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | TOK_LSQBR expr method_call_sel_and_args TOK_RSQBR
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     cons(1, consts.cl.list, $2, $3);
     method_call_new(0, R1);
 
-    VM_POP(R1);
+    vm_pop(1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -348,16 +345,16 @@ block_args_1:
 {
     list_concat($1, $2);
 
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | sym
 {
     cons(0, consts.cl.list, $1, NIL);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -365,14 +362,14 @@ block_args_1:
 block_args:
         TOK_LPAREN block_args_1 TOK_RPAREN
 {
-    VM_ASSIGN(R0, $2);
+    vm_assign(0, $2);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | TOK_LPAREN TOK_RPAREN
 {
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 
     $$ = R0;
 }
@@ -383,16 +380,16 @@ block_body_1:
 {
     list_concat($1, $2);
 
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | expr
 {
     cons(0, consts.cl.list, $1, NIL);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -400,14 +397,14 @@ block_body_1:
 block_body:
         block_body_1
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | /* empty */
 {
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 
     $$ = R0;
 }
@@ -416,14 +413,14 @@ block_body:
 block:
         TOK_LBRACE block_args block_body TOK_RBRACE
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     cons(1, consts.cl.list, $2, $3);
     block_new(0, R1);
 
-    VM_POP(R1);
+    vm_pop(1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -431,50 +428,50 @@ block:
 expr:
         atom
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | pair
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | list
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | method_call
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | block
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         | TOK_QUOTE expr
 {
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     cons(2, consts.cl.list, consts.str.quote, NIL);
     cons(1, consts.cl.list, $2, R2);
     method_call_new(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
     
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 }
         ;
@@ -482,9 +479,9 @@ expr:
 inp:
         expr
 {
-    VM_ASSIGN(R0, $1);
+    vm_assign(0, $1);
 
-    VM_PUSH(R0);
+    vm_push(0);
     $$ = R0;
 
     YYACCEPT;

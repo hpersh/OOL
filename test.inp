@@ -109,12 +109,12 @@
 [#System assert: [[#System shell: "ls"] equals: 0]]
 
 // Test #File
-[#File new: "test.inp"]  // Test new
+[#File new: "test.inp" mode: "r+"]  // Test new
 
 // Test #Module
-[#Module new: "./socket.so"]  // Test new
-#Socket  // Test loading
-[s = [#Socket new]]  // Test loading
+// [#Module new: "./socket.so"]  // Test new
+// #Socket  // Test loading
+// [s = [#Socket new]]  // Test loading
 
 // Test mem mgmt
 [#System collect]

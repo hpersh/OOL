@@ -134,26 +134,15 @@ obj_t regs[8];
 obj_t obj_retain(obj_t);
 void  obj_release(obj_t);
 
-void vm_assign(obj_t *dst, obj_t val);
-#define VM_ASSIGN(dst, val)   (vm_assign(&(dst), (val)))
-
+void vm_assign(unsigned dst, obj_t val);
 void vm_inst_alloc(unsigned dst, obj_t cl);
-
-void vm_push(obj_t obj);
-#define VM_PUSH(obj)  (vm_push(obj_retain(obj)))
-
-void vm_pushm(obj_t *src, unsigned n);
-#define VM_PUSHM(src, n)  (vm_pushm(&(src), (n)))
-
-void vm_pop(obj_t *dst);
-#define VM_POP(dst)  (vm_pop(&(dst)))
-
-void vm_popm(obj_t *dst, unsigned n);
-#define VM_POPM(dst, n)  (vm_popm(&(dst), (n)))
-
+void vm_pushl(obj_t obj);
+void vm_push(unsigned src);
+void vm_pushm(unsigned src, unsigned n);
+void vm_pop(unsigned dst);
+void vm_popm(unsigned dst, unsigned n);
 void vm_drop(void);
-#define VM_DROP()  (vm_drop())
-
+void vm_dropn(unsigned n);
 
 void inst_init_passthru(obj_t cl, obj_t inst, va_list ap);
 void inst_walk_passthru(obj_t cl, obj_t inst, void (*func)(obj_t));
@@ -173,6 +162,8 @@ unsigned string_hash(obj_t s);
 unsigned string_equal(obj_t s1, obj_t s2);
 void string_tocstr(unsigned dst, obj_t s);
 void cons(unsigned dst, obj_t cl, obj_t car, obj_t cdr);
+void _list_concat(obj_t li, obj_t obj);
+void list_concat(obj_t li, obj_t obj);
 void method_call_new(unsigned dst, obj_t list);
 void block_new(unsigned dst, obj_t list);
 void array_new(unsigned dst, unsigned size);

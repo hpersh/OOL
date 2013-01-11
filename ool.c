@@ -144,40 +144,6 @@ mem_init(void)
     obj_list_idx_marked = 1;
 }
 
-void
-obj_free(obj_t obj)
-{
-    if (obj == NIL)  return;
-
-    if (!collectingf)  cl_inst_walk(inst_of(obj), obj, obj_release);
-
-    list_erase(&obj->list_node);
-
-    cl_inst_free(inst_of(obj), obj);
-}
-
-void
-obj_release(obj_t obj)
-{
-    if (obj == NIL)  return;
-
-    ASSERT(obj->ref_cnt != 0);
-
-    if (--obj->ref_cnt == 0)  obj_free(obj);
-}
-
-obj_t
-obj_retain(obj_t obj)
-{
-    if (obj) {
-        ++obj->ref_cnt;
-
-        ASSERT(obj->ref_cnt != 0);
-    }
-
-    return (obj);
-}
-
 void collect();
 unsigned initf;
 
@@ -274,6 +240,70 @@ zcmalloc(unsigned size)
     void *result = cmalloc(size);
 
     memset(result, 0, size);
+
+    return (result);
+}
+
+void
+obj_free(obj_t obj)
+{
+    if (obj == NIL)  return;
+
+    if (!collectingf)  cl_inst_walk(inst_of(obj), obj, obj_release);
+
+    list_erase(&obj->list_node);
+
+    cl_inst_free(inst_of(obj), obj);
+}
+
+void
+obj_release(obj_t obj)
+{
+    if (obj == NIL)  return;
+
+    ASSERT(obj->ref_cnt != 0);
+
+    if (--obj->ref_cnt == 0)  obj_free(obj);
+}
+
+obj_t
+obj_retain(obj_t obj)
+{
+    if (obj) {
+        ++obj->ref_cnt;
+
+        ASSERT(obj->ref_cnt != 0);
+    }
+
+    return (obj);
+}
+
+void
+_obj_assign(obj_t *dst, obj_t obj)
+{
+    obj_t old = *dst;
+
+    *dst = obj;
+    obj_release(old);
+}
+
+void
+obj_assign(obj_t *dst, obj_t obj)
+{
+    _obj_assign(dst, obj_retain(obj));
+}
+#define OBJ_ASSIGN(dst, src)  (obj_assign(&(dst), (src)))
+
+obj_t
+obj_alloc(obj_t cl)
+{
+    obj_t result;
+
+    result = (obj_t) zcmalloc(CLASS(cl)->inst_size);
+
+    list_insert(&result->list_node, LIST_END(OBJ_LIST_ACTIVE));
+
+    OBJ_ASSIGN(result->inst_of, cl);
 
     return (result);
 }
@@ -392,82 +422,97 @@ collect(void)
 /***************************************************************************/
 
 void
-_vm_assign(obj_t *dst, obj_t val)
+vm_assign(unsigned dst, obj_t val)
 {
-    obj_t old = *dst;
-
-    *dst = val;
-    obj_release(old);
-}
-
-void
-vm_assign(obj_t *dst, obj_t val)
-{
-    _vm_assign(dst, obj_retain(val));
+    OBJ_ASSIGN(regs[dst], val);
 }
 
 void
 vm_inst_alloc(unsigned dst, obj_t cl)
 {
-    obj_t obj;
-
-    obj = (obj_t) zcmalloc(CLASS(cl)->inst_size);
-
-    list_insert(&obj->list_node, LIST_END(OBJ_LIST_ACTIVE));
-
-    VM_ASSIGN(obj->inst_of, cl);
-    VM_ASSIGN(regs[dst], obj);
+    vm_assign(dst, obj_alloc(cl));
 }
 
+#ifdef DEBUG
+
+#define VM_STATS_UPDATE_PUSH(n) \
+    do {								\
+	if ((stats.vm.stack_depth += (n)) > stats.vm.stack_depth_max) {	\
+	    stats.vm.stack_depth_max = stats.vm.stack_depth;		\
+	}								\
+    } while (0)
+
+#define VM_STATS_UPDATE_POP(n)   (stats.vm.stack_depth -= (n))
+
+#else
+
+#define VM_STATS_UPDATE_PUSH(n)
+#define VM_STATS_UPDATE_POP(n)
+
+#endif
+
 void
-vm_push(obj_t obj)
+vm_pushl(obj_t obj)
 {
     ASSERT(sp > stack);
+    VM_STATS_UPDATE_PUSH(1);
 
-    *--sp = obj;
-
-#ifdef DEBUG
-    ++stats.vm.stack_depth;
-    if (stats.vm.stack_depth > stats.vm.stack_depth_max) {
-        stats.vm.stack_depth_max = stats.vm.stack_depth;
-    }
-#endif
+    *--sp = obj_retain(obj);
 }
 
 void
-vm_pushm(obj_t *src, unsigned n)
+vm_push(unsigned src)
 {
-    for (; n; --n, ++src)  vm_push(obj_retain(*src));
+    vm_pushl(regs[src]);
 }
 
 void
-vm_pop(obj_t *dst)
+vm_pushm(unsigned src, unsigned n)
+{
+    obj_t *p;
+
+    ASSERT((sp - n) >= stack);
+    VM_STATS_UPDATE_PUSH(n);
+
+    for (p = &regs[src]; n; --n, ++p)  *--sp = obj_retain(*p);
+}
+
+void
+vm_pop(unsigned dst)
 {
     ASSERT(sp < stack_end);
+    VM_STATS_UPDATE_POP(1);
 
-    _vm_assign(dst, *sp++);
-
-#ifdef DEBUG
-    --stats.vm.stack_depth;
-#endif
+    _obj_assign(&regs[dst], *sp++);
 }
 
 void
-vm_popm(obj_t *dst, unsigned n)
+vm_popm(unsigned dst, unsigned n)
 {
-    for (dst += (n - 1); n; --n, --dst)  vm_pop(dst);
+    obj_t *p;
+
+    ASSERT((sp + n) <= stack_end);
+    VM_STATS_UPDATE_POP(n);
+
+    for (p = &regs[dst + n - 1]; n; --n, --p)  _obj_assign(p, *sp++);
 }
 
 void
 vm_drop(void)
 {
     ASSERT(sp < stack_end);
+    VM_STATS_UPDATE_POP(1);
 
     obj_release(*sp++);
+}
 
-#ifdef DEBUG
-    --stats.vm.stack_depth;
-#endif
+void
+vm_dropn(unsigned n)
+{
+    ASSERT((sp + n) <= stack_end);
+    VM_STATS_UPDATE_POP(n);
+
+    for (; n; --n)  obj_release(*sp++);
 }
 
 /***************************************************************************/
@@ -514,13 +559,13 @@ method_call(unsigned argc)
     obj_t recvr = FRAME_RECVR, sel = FRAME_SEL, cl;
     unsigned sel_with_colon = 0;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     if (STRING(sel)->data[STRING(sel)->size - 1] == ':') {
         string_new(1, 1, STRING(sel)->size - 1, STRING(sel)->data);
         sel_with_colon = 1;
     } else {
-        VM_ASSIGN(R1, sel);
+        vm_assign(1, sel);
     }
 
     cl = inst_of(recvr);
@@ -530,9 +575,9 @@ method_call(unsigned argc)
 
             if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
 		if (sel_with_colon) {
-		    VM_ASSIGN(CDR(obj), FRAME_ARG_0);
+		    OBJ_ASSIGN(CDR(obj), FRAME_ARG_0);
 		}
-		VM_ASSIGN(R0, CDR(obj));
+		vm_assign(0, CDR(obj));
 		goto done;
 	    }
 
@@ -550,9 +595,9 @@ method_call(unsigned argc)
             obj_t *p = (obj_t *)((char *) recvr + INTEGER(CDR(obj))->val);
 
             if (sel_with_colon) {
-                vm_assign(p, FRAME_ARG_0);
+                obj_assign(p, FRAME_ARG_0);
             }
-            VM_ASSIGN(R0, *p);
+            vm_assign(0, *p);
             goto done;
         }
 
@@ -565,7 +610,7 @@ method_call(unsigned argc)
     ASSERT(0);                  /* Method not found */
 
  done:
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -573,8 +618,8 @@ method_call_0(obj_t recvr, obj_t sel)
 {
     FRAME_BEGIN {
         cons(0, consts.cl.list, recvr, NIL);
-        VM_PUSH(R0);
-        VM_PUSH(sel);
+        vm_push(0);
+        vm_pushl(sel);
         method_call(0);
     } FRAME_END;
 }
@@ -585,8 +630,8 @@ method_call_1(obj_t recvr, obj_t sel, obj_t arg)
     FRAME_BEGIN {
         cons(0, consts.cl.list, arg, NIL);
         cons(0, consts.cl.list, recvr, R0);
-        VM_PUSH(R0);
-        VM_PUSH(sel);
+        vm_push(0);
+        vm_pushl(sel);
         method_call(1);
     } FRAME_END;
 }
@@ -598,8 +643,8 @@ method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
         cons(0, consts.cl.list, arg2, NIL);
         cons(0, consts.cl.list, arg1, R0);
         cons(0, consts.cl.list, recvr, R0);
-        VM_PUSH(R0);
-        VM_PUSH(sel);
+        vm_push(0);
+        vm_pushl(sel);
         method_call(2);
     } FRAME_END;
 }
@@ -635,19 +680,19 @@ cm_object_new(unsigned argc)
 void
 cm_object_quote(unsigned argc)
 {
-    VM_ASSIGN(R0, FRAME_RECVR);
+    vm_assign(0, FRAME_RECVR);
 }
 
 void
 cm_object_eval(unsigned argc)
 {
-    VM_ASSIGN(R0, FRAME_RECVR);
+    vm_assign(0, FRAME_RECVR);
 }
 
 void
 cm_object_instof(unsigned argc)
 {
-    VM_ASSIGN(R0, inst_of(FRAME_RECVR));
+    vm_assign(0, inst_of(FRAME_RECVR));
 }
 
 void
@@ -663,7 +708,7 @@ cm_object_tostring(unsigned argc)
     char  buf[64];
 
     if (recvr == NIL) {
-        VM_ASSIGN(R0, consts.str.nil);
+        vm_assign(0, consts.str.nil);
         return;
     }
 
@@ -682,7 +727,7 @@ cm_object_print(unsigned argc)
     method_call_0(recvr, consts.str.tostring);
     method_call_0(R0, consts.str.print);
 
-    VM_ASSIGN(R0, recvr);
+    vm_assign(0, recvr);
 }
 
 void
@@ -691,7 +736,7 @@ cm_object_append(unsigned argc)
     ASSERT(FRAME_RECVR == NIL);
     ASSERT(inst_of(FRAME_ARG_0) == consts.cl.list);
 
-    VM_ASSIGN(R0, FRAME_ARG_0);
+    vm_assign(0, FRAME_ARG_0);
 }
 
 /***************************************************************************/
@@ -726,13 +771,13 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 cm_metaclass_name(unsigned argc)
 {
-    VM_ASSIGN(R0, CLASS(FRAME_RECVR)->name);
+    vm_assign(0, CLASS(FRAME_RECVR)->name);
 }
 
 void
 cm_metaclass_parent(unsigned argc)
 {
-    VM_ASSIGN(R0, CLASS(FRAME_RECVR)->parent);
+    vm_assign(0, CLASS(FRAME_RECVR)->parent);
 }
 
 void dict_keys(obj_t dict);
@@ -779,20 +824,20 @@ cm_metaclass_new(unsigned argc)
     unsigned inst_size;
     obj_t    p;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     vm_inst_alloc(0, consts.cl.metaclass);
-    VM_ASSIGN(CLASS(R0)->name,   FRAME_ARG_0);
-    VM_ASSIGN(CLASS(R0)->parent, FRAME_ARG_1);
+    OBJ_ASSIGN(CLASS(R0)->name,   FRAME_ARG_0);
+    OBJ_ASSIGN(CLASS(R0)->parent, FRAME_ARG_1);
     env_new(CLASS(R0)->name, R0);
     string_dict_new(1, 16);
-    VM_ASSIGN(CLASS(R0)->cl_methods, R1);
+    OBJ_ASSIGN(CLASS(R0)->cl_methods, R1);
     string_dict_new(1, 16);
-    VM_ASSIGN(CLASS(R0)->cl_vars, R1);
+    OBJ_ASSIGN(CLASS(R0)->cl_vars, R1);
     string_dict_new(1, 16);
-    VM_ASSIGN(CLASS(R0)->inst_methods, R1);
+    OBJ_ASSIGN(CLASS(R0)->inst_methods, R1);
     string_dict_new(1, 16);
-    VM_ASSIGN(CLASS(R0)->inst_vars, R1);
+    OBJ_ASSIGN(CLASS(R0)->inst_vars, R1);
     for (inst_size = CLASS(CLASS(R0)->parent)->inst_size, p = FRAME_ARG_2;
          p;
          p = CDR(p), inst_size += sizeof(obj_t)
@@ -805,7 +850,7 @@ cm_metaclass_new(unsigned argc)
     CLASS(R0)->inst_walk = inst_walk_user;
     CLASS(R0)->inst_free = inst_free_passthru;
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 /***************************************************************************/
@@ -834,7 +879,7 @@ cm_code_method_eval(unsigned argc)
     obj_t recvr = FRAME_RECVR, args = FRAME_ARG_0;
 
     FRAME_BEGIN {
-        VM_PUSH(args);
+        vm_pushl(args);
         (*CODE_METHOD(recvr)->func)(list_len(args));
     } FRAME_END;
 }
@@ -878,7 +923,7 @@ cm_boolean_not(unsigned argc)
 void
 cm_boolean_tostring(unsigned argc)
 {
-    VM_ASSIGN(R0, BOOLEAN(FRAME_RECVR)->val ? consts.str._true : consts.str._false);
+    vm_assign(0, BOOLEAN(FRAME_RECVR)->val ? consts.str._true : consts.str._false);
 }
 
 void
@@ -887,7 +932,7 @@ cm_boolean_if(unsigned argc)
     if (BOOLEAN(FRAME_RECVR)->val) {
 	method_call_0(FRAME_ARG_0, consts.str.eval);
     } else {
-	VM_ASSIGN(R0, NIL);
+	vm_assign(0, NIL);
     }
 }
 
@@ -1002,7 +1047,7 @@ cm_integer_tostring_base(unsigned argc)
 void
 cm_integer_hash(unsigned argc)
 {
-    VM_ASSIGN(R0, FRAME_RECVR);
+    vm_assign(0, FRAME_RECVR);
 }
 
 void
@@ -1058,17 +1103,17 @@ integer_range(long long init, long long lim, long long step)
     long long val;
     obj_t     *p;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
     for (p = &R0, val = init; val < lim; val += step) {
         integer_new(1, val);
         cons(2, consts.cl.list, R1, NIL);
-        vm_assign(p, R2);
+        obj_assign(p, R2);
         p = &CDR(R2);
     }
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1336,7 +1381,7 @@ cm_string_equal(unsigned argc)
 void
 cm_string_tostring(unsigned argc)
 {
-    VM_ASSIGN(R0, FRAME_RECVR);
+    vm_assign(0, FRAME_RECVR);
 }
 
 void
@@ -1354,7 +1399,7 @@ obj_t env_at(obj_t s);
 void
 cm_string_eval(unsigned argc)
 {
-    VM_ASSIGN(R0, env_at(FRAME_RECVR));
+    vm_assign(0, env_at(FRAME_RECVR));
 }
 
 void
@@ -1374,7 +1419,7 @@ cm_string_print(unsigned argc)
         }
     }
 
-    VM_ASSIGN(R0, recvr);
+    vm_assign(0, recvr);
 }
 
 void
@@ -1418,20 +1463,20 @@ cm_string_foreach(unsigned argc)
     char     *s;
     unsigned n;
 
-    VM_PUSHM(R1, 3);
+    vm_pushm(1, 3);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1, s = STRING(FRAME_RECVR)->data, n = STRING(FRAME_RECVR)->size; n; --n, ++s) {
 	string_new(3, 1, 1, s);
 	cons(3, consts.cl.list, R3, NIL);
         method_call_1(arg, consts.str.evalc, R3);
         cons(2, consts.cl.list, R0, NIL);
-        vm_assign(p, R2);
+        obj_assign(p, R2);
         p = &CDR(R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 3);
+    vm_popm(1, 3);
 }
 
 int
@@ -1465,22 +1510,22 @@ cm_string_split(unsigned argc)
     obj_t    recvr = FRAME_RECVR, arg = FRAME_ARG_0, *p;
     unsigned ofs;
 
-    VM_PUSHM(R1, 3);
+    vm_pushm(1, 3);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1, ofs = 0; ofs < STRING(recvr)->size; ) {
 	int      i = string_index(recvr, arg, ofs, 1);
 	unsigned n = (i < 0) ? STRING(recvr)->size - ofs : (unsigned) i - ofs;
 
 	string_new(2, 1, n, STRING(recvr)->data + ofs);
 	cons(3, consts.cl.list, R2, NIL);
-	vm_assign(p, R3);
+	obj_assign(p, R3);
 	p = &CDR(R3);
 	ofs += n + 1;
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 3);
+    vm_popm(1, 3);
 }
 
 void
@@ -1488,9 +1533,9 @@ read_eval(void)
 {
     obj_t *sp_save;
     
-    VM_PUSH(R1);
+    vm_push(1);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for(sp_save = sp;;) {
         int rc = yyparse();
 
@@ -1499,11 +1544,11 @@ read_eval(void)
         if (rc != 0) break;
 
         method_call_0(R0, consts.str.eval);
-	VM_ASSIGN(R1, R0);
+	vm_assign(1, R0);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -1528,20 +1573,20 @@ inst_init_dptr(obj_t cl, obj_t inst, va_list ap)
     obj_t car = va_arg(ap, obj_t);
     obj_t cdr = va_arg(ap, obj_t);
 
-    VM_ASSIGN(DPTR(inst)->car, car);
-    VM_ASSIGN(DPTR(inst)->cdr, cdr);
+    OBJ_ASSIGN(DPTR(inst)->car, car);
+    OBJ_ASSIGN(DPTR(inst)->cdr, cdr);
     cl_inst_init(CLASS(cl)->parent, inst, ap);
 }
 
 void
 cons(unsigned dst, obj_t cl, obj_t car, obj_t cdr)
 {
-    VM_PUSH(regs[dst]);
+    vm_pushl(regs[dst]);
 
     vm_inst_alloc(dst, cl);
     inst_init(regs[dst], car, cdr);
 
-    VM_DROP();
+    vm_drop();
 }
 
 void
@@ -1555,13 +1600,13 @@ inst_walk_dptr(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 cm_dptr_car(unsigned argc)
 {
-    VM_ASSIGN(R0, CAR(FRAME_RECVR));
+    vm_assign(0, CAR(FRAME_RECVR));
 }
 
 void
 cm_dptr_cdr(unsigned argc)
 {
-    VM_ASSIGN(R0, CDR(FRAME_RECVR));
+    vm_assign(0, CDR(FRAME_RECVR));
 }
 
 void
@@ -1569,15 +1614,15 @@ cm_dptr_hash(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     method_call_0(CAR(recvr), consts.str.hash);
-    VM_ASSIGN(R1, R0);
+    vm_assign(1, R0);
     method_call_0(CDR(recvr), consts.str.hash);
-    VM_ASSIGN(R2, R0);
+    vm_assign(2, R0);
     method_call_1(R1, consts.str.addc, R2);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1585,15 +1630,15 @@ cm_dptr_equals(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     method_call_1(CAR(recvr), consts.str.equalsc, CAR(arg));
-    VM_ASSIGN(R1, R0);
+    vm_assign(1, R0);
     method_call_1(CDR(recvr), consts.str.equalsc, CDR(arg));
-    VM_ASSIGN(R2, R0);
+    vm_assign(2, R0);
     method_call_1(R1, consts.str.andc, R2);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -1605,14 +1650,14 @@ cm_pair_eval(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     method_call_0(CAR(recvr), consts.str.eval);
-    VM_ASSIGN(R1, R0);
+    vm_assign(1, R0);
     method_call_0(CDR(recvr), consts.str.eval);
     cons(0, consts.cl.pair, R1, R0);
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -1620,12 +1665,12 @@ cm_pair_tostring(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     method_call_0(CAR(recvr), consts.str.tostring);
-    VM_ASSIGN(R1, R0);
+    vm_assign(1, R0);
     method_call_0(CDR(recvr), consts.str.tostring);
-    VM_ASSIGN(R2, R0);
+    vm_assign(2, R0);
     string_new(0, 5, 1, "(",
 	             STRING(R1)->size, STRING(R1)->data,
 	             2, ", ",
@@ -1633,7 +1678,7 @@ cm_pair_tostring(unsigned argc)
 	             1, ")"
 	       );
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1652,7 +1697,7 @@ cm_pair_at(unsigned argc)
 	ASSERT(0);
     }
 
-    VM_ASSIGN(R0, result);
+    vm_assign(0, result);
 }
 
 /***************************************************************************/
@@ -1681,18 +1726,18 @@ _list_concat(obj_t list, obj_t obj)
     obj_t p, q;
 
     for (p = list; q = CDR(p); p = q);
-    VM_ASSIGN(CDR(p), obj);
+    OBJ_ASSIGN(CDR(p), obj);
 }
 
 void
 list_concat(obj_t list, obj_t obj)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     cons(1, consts.cl.list, obj, NIL);
     _list_concat(list, R1);
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -1701,7 +1746,7 @@ list_tostr(obj_t list, char *delim)
     char  c;
     obj_t p;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     string_new(1, 1, 0, 0);
     c = delim[0];
@@ -1711,11 +1756,11 @@ list_tostr(obj_t list, char *delim)
                                         1,               &c,
                          STRING(R0)->size, STRING(R0)->data
                    );
-        VM_ASSIGN(R1, R2);
+        vm_assign(1, R2);
     }
     string_new(0, 2, STRING(R1)->size, STRING(R1)->data, 1, &delim[1]);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1729,17 +1774,17 @@ list_eval(obj_t list)
 {
     obj_t *q;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (q = &R1; list; list = CDR(list), q = &CDR(R2)) {
         method_call_0(CAR(list), consts.str.eval);
         cons(2, consts.cl.list, R0, NIL);
-        vm_assign(q, R2);
+        obj_assign(q, R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1753,18 +1798,18 @@ cm_list_map(unsigned argc)
 {
     obj_t arg = FRAME_ARG_0, *p, q;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
         method_call_1(arg, consts.str.evalc, CAR(q));
         cons(2, consts.cl.list, R0, NIL);
-        vm_assign(p, R2);
+        obj_assign(p, R2);
         p = &CDR(R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1772,19 +1817,19 @@ cm_list_foreach(unsigned argc)
 {
     obj_t arg = FRAME_ARG_0, *p, q;
 
-    VM_PUSHM(R1, 3);
+    vm_pushm(1, 3);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
         cons(3, consts.cl.list, CAR(q), NIL);
         method_call_1(arg, consts.str.evalc, R3);
         cons(2, consts.cl.list, R0, NIL);
-        vm_assign(p, R2);
+        obj_assign(p, R2);
         p = &CDR(R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 3);
+    vm_popm(1, 3);
 }
 
 void
@@ -1792,7 +1837,7 @@ cm_list_splice(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     string_new(1, 1, 0, 0);
     for ( ; recvr; recvr = CDR(recvr)) {
@@ -1805,11 +1850,11 @@ cm_list_splice(unsigned argc)
 		             STRING(R0)->size, STRING(R0)->data
 		       );
 	}
-	VM_ASSIGN(R1, R2);
+	vm_assign(1, R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
     
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1820,18 +1865,18 @@ cm_list_append(unsigned argc)
 
     ASSERT(inst_of(arg) == consts.cl.list);
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
         cons(2, consts.cl.list, CAR(q), NIL);
-	vm_assign(p, R2);
+	obj_assign(p, R2);
         p = &CDR(R2);
     }
-    vm_assign(p, arg);
-    VM_ASSIGN(R0, R1);
+    obj_assign(p, arg);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1839,18 +1884,18 @@ cm_list_hash(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     integer_new(1, 0);
     for ( ; recvr; recvr = CDR(recvr)) {
 	method_call_0(CAR(recvr), consts.str.hash);
-	VM_ASSIGN(R2, R0);
+	vm_assign(2, R0);
 	method_call_1(R1, consts.str.addc, R2);
-	VM_ASSIGN(R1, R0);
+	vm_assign(1, R0);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1858,7 +1903,7 @@ cm_list_equals(unsigned argc)
 {
     obj_t    recvr = FRAME_RECVR, arg = FRAME_ARG_0;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     boolean_new(1, 1);
     for ( ;
@@ -1866,14 +1911,14 @@ cm_list_equals(unsigned argc)
 	  recvr = CDR(recvr), arg = CDR(arg)
 	  ) {
 	method_call_1(CAR(recvr), consts.str.equalsc, CAR(arg));
-	VM_ASSIGN(R2, R0);
+	vm_assign(2, R0);
 	method_call_1(R1, consts.str.andc, R2);
-	VM_ASSIGN(R1, R0);
+	vm_assign(1, R0);
     }
     if (recvr || arg)  BOOLEAN(R1)->val = 0;
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -1884,7 +1929,7 @@ cm_list_at(unsigned argc)
 
     for (p = FRAME_RECVR; p; p = CDR(p), --i) {
 	if (i == 0) {
-	    VM_ASSIGN(R0, CAR(p));
+	    vm_assign(0, CAR(p));
 	    return;
 	}
     }
@@ -1899,9 +1944,9 @@ cm_list_at_len(unsigned argc)
     unsigned n = INTEGER(FRAME_ARG_1)->val;
     obj_t    p, *q;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (q = &R1, p = FRAME_RECVR; p && n; p = CDR(p)) {
 	if (i > 0) {
 	    --i;
@@ -1909,13 +1954,13 @@ cm_list_at_len(unsigned argc)
 	}
 
 	cons(2, consts.cl.list, CAR(p), NIL);
-	vm_assign(q, R2);
+	obj_assign(q, R2);
 	q = &CDR(R2);
 	--n;
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -1927,7 +1972,7 @@ inst_init_method_call(obj_t cl, obj_t inst, va_list ap)
 {
     obj_t list = va_arg(ap, obj_t);
 
-    VM_ASSIGN(METHOD_CALL(inst)->list, list);
+    OBJ_ASSIGN(METHOD_CALL(inst)->list, list);
     cl_inst_init(CLASS(cl)->parent, inst, ap);
 }
 
@@ -1960,7 +2005,7 @@ cm_method_call_eval(unsigned argc)
 {
     obj_t arg = METHOD_CALL(FRAME_RECVR)->list;
 
-    VM_PUSHM(R1, 3);
+    vm_pushm(1, 3);
     
     FRAME_BEGIN {
         unsigned n, nargs, s, quotef = 0;
@@ -1983,7 +2028,7 @@ cm_method_call_eval(unsigned argc)
             nargs = n >> 1;
         } else  ASSERT(0);
 
-        VM_ASSIGN(R1, NIL);
+        vm_assign(1, NIL);
         vm_inst_alloc(2, consts.cl.string);
         inst_init(regs[2], s);
         for (q = &R1, r = STRING(R2)->data, n = 0, p = arg; p; p = CDR(p), ++n) {
@@ -1995,21 +2040,21 @@ cm_method_call_eval(unsigned argc)
             }
 
             cons(3, consts.cl.list, CAR(p), NIL);
-            vm_assign(q, R3);
+            obj_assign(q, R3);
             q = &CDR(R3);
         }
 
         if (quotef) {
-            VM_PUSH(R1);
+            vm_push(1);
         } else {
             list_eval(R1);
-            VM_PUSH(R0);
+            vm_push(0);
         }
-        VM_PUSH(R2);
+        vm_push(2);
         method_call(nargs);
     } FRAME_END;
 
-    VM_POPM(R1, 3);
+    vm_popm(1, 3);
 }
 
 void
@@ -2023,19 +2068,19 @@ cm_list_filter(unsigned argc)
 {
     obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0, *p;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (p = &R1; recvr && arg; recvr = CDR(recvr), arg = CDR(arg)) {
 	if (!BOOLEAN(CAR(arg))->val)  continue;
 
 	cons(2, consts.cl.list, CAR(recvr), NIL);
-	vm_assign(p, R2);
+	obj_assign(p, R2);
 	p = &CDR(R2);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -2043,18 +2088,18 @@ cm_list_reduce(unsigned argc)
 {
     obj_t body = FRAME_ARG_0, p;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
     
-    VM_ASSIGN(R1, FRAME_ARG_1);
+    vm_assign(1, FRAME_ARG_1);
     for (p = FRAME_RECVR; p; p = CDR(p)) {
 	cons(2, consts.cl.list, CAR(p), NIL);
 	cons(2, consts.cl.list, R1, R2);
 	method_call_1(body, consts.str.evalc, R2);
-	VM_ASSIGN(R1, R0);
+	vm_assign(1, R0);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -2078,7 +2123,7 @@ inst_init_block(obj_t cl, obj_t inst, va_list ap)
 {
     obj_t list = va_arg(ap, obj_t);
 
-    VM_ASSIGN(BLOCK(inst)->list, list);
+    OBJ_ASSIGN(BLOCK(inst)->list, list);
     cl_inst_init(CLASS(cl)->parent, inst, ap);
 }
 
@@ -2111,7 +2156,7 @@ cm_block_eval(unsigned argc)
         env_new(CAR(p), CAR(q));
     }
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 
     prog_frame->prev = pfp;
     pfp = prog_frame;
@@ -2199,7 +2244,7 @@ cm_array_new(unsigned argc)
 
 	array_new(0, list_len(arg));
 	for (p = ARRAY(R0)->data, n = ARRAY(R0)->size; n; --n, ++p, arg = CDR(arg)) {
-	    vm_assign(p, CAR(arg));
+	    obj_assign(p, CAR(arg));
 	}
 	return;
     }
@@ -2210,7 +2255,7 @@ cm_array_new(unsigned argc)
 void
 cm_array_at(unsigned argc)
 {
-    VM_ASSIGN(R0, ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val]);
+    vm_assign(0, ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val]);
 }
 
 void
@@ -2218,9 +2263,9 @@ cm_array_at_put(unsigned argc)
 {
     obj_t val = FRAME_ARG_1;
 
-    VM_ASSIGN(ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val], val);
+    obj_assign(&ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val], val);
     
-    VM_ASSIGN(R0, val);
+    vm_assign(0, val);
 }
 
 void
@@ -2229,17 +2274,17 @@ cm_array_tostring(unsigned argc)
     obj_t    *p, *q;
     unsigned n;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
     for (q = &R1, p = ARRAY(FRAME_RECVR)->data, n = ARRAY(FRAME_RECVR)->size; n; --n, ++p) {
 	cons(2, consts.cl.list, *p, NIL);
-	vm_assign(q, R2);
+	obj_assign(q, R2);
 	q = &CDR(R2);
     }
     method_call_0(R1, consts.str.tostring);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -2324,7 +2369,7 @@ dict_at(obj_t dict, obj_t key)
 void
 cm_dict_at(unsigned argc)
 {
-    VM_ASSIGN(R0, dict_at(FRAME_RECVR, FRAME_ARG_0));
+    vm_assign(0, dict_at(FRAME_RECVR, FRAME_ARG_0));
 }
 
 void
@@ -2333,15 +2378,15 @@ dict_at_put(obj_t dict, obj_t key, obj_t val)
     obj_t p, *bucket;
 
     if (p = dict_find(dict, key, &bucket)) {
-        VM_ASSIGN(CDR(p), val);
+        OBJ_ASSIGN(CDR(p), val);
     } else {
-        VM_PUSHM(R1, 2);
+        vm_pushm(1, 2);
 
         cons(1, consts.cl.pair, key, val);
         cons(2, consts.cl.list, R1, *bucket);
-        vm_assign(bucket, R2);
+        obj_assign(bucket, R2);
 
-        VM_POPM(R1, 2);
+        vm_popm(1, 2);
     }
 }
 
@@ -2352,7 +2397,7 @@ cm_dict_at_put(unsigned argc)
 
     dict_at_put(FRAME_RECVR, FRAME_ARG_0, val);
 
-    VM_ASSIGN(R0, val);
+    vm_assign(0, val);
 }
 
 void
@@ -2365,13 +2410,13 @@ dict_del(obj_t dict, obj_t key)
             obj_t r = CAR(p);
 
             if ((*DICT(dict)->equal_func)(CAR(r), key)) {
-                VM_PUSH(R1);
+                vm_push(1);
                 
-                VM_ASSIGN(R1, CDR(p));
-                VM_ASSIGN(CDR(p), NIL);
-                vm_assign(q, R1);
+                vm_assign(1, CDR(p));
+                OBJ_ASSIGN(CDR(p), NIL);
+                obj_assign(q, R1);
 
-                VM_POP(R1);
+                vm_pop(1);
 
                 break;
             }
@@ -2386,7 +2431,7 @@ cm_dict_del(unsigned argc)
 
     dict_del(FRAME_RECVR, arg);
 
-    VM_ASSIGN(R0, arg);
+    vm_assign(0, arg);
 }
 
 void
@@ -2395,18 +2440,18 @@ dict_keys(obj_t dict)
     obj_t    *p, *q, r;
     unsigned n;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
     for (p = &R0, q = DICT(dict)->base.data, n = DICT(dict)->base.size; n; --n, ++q) {
         for (r = *q; r; r = CDR(r)) {
             cons(1, consts.cl.list, CAR(CAR(r)), NIL);
-            vm_assign(p, R1);
+            obj_assign(p, R1);
             p = &CDR(R1);
         }
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -2421,20 +2466,20 @@ cm_dict_tostring(unsigned argc)
     obj_t    recvr = FRAME_RECVR, *p, *q, r;
     unsigned n;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
     for (p = &R0, q = DICT(recvr)->base.data, n = DICT(recvr)->base.size; n; --n, ++q) {
         for (r = *q; r; r = CDR(r)) {
             cons(1, consts.cl.list, CAR(r), NIL);
-            vm_assign(p, R1);
+            obj_assign(p, R1);
             p = &CDR(R1);
         }
     }
 
     method_call_0(R0, consts.str.tostring);
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 /***************************************************************************/
@@ -2448,9 +2493,9 @@ cm_prog_while(unsigned argc)
     struct prog_frame prog_frame[1];
     int               rc;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
-    VM_ASSIGN(R1, NIL);
+    vm_assign(1, NIL);
 
     prog_frame->prev = pfp;
     pfp = prog_frame;
@@ -2474,14 +2519,14 @@ cm_prog_while(unsigned argc)
 	method_call_0(cond, consts.str.eval);
 	if (!BOOLEAN(R0)->val)  break;
 	method_call_0(body, consts.str.eval);
-	VM_ASSIGN(R1, R0);
+	vm_assign(1, R0);
     }
-    VM_ASSIGN(R0, R1);
+    vm_assign(0, R1);
 
  done:
     pfp = pfp->prev;
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -2489,7 +2534,7 @@ cm_prog_break(unsigned argc)
 {
     ASSERT(pfp != 0);
 
-    VM_ASSIGN(R0, FRAME_ARG_0);
+    vm_assign(0, FRAME_ARG_0);
     longjmp(pfp->jmp_buf, LONGJMP_PROG_BREAK);
 }
 
@@ -2506,7 +2551,7 @@ cm_prog_return(unsigned argc)
 {
     ASSERT(pfp != 0);
 
-    VM_ASSIGN(R0, FRAME_ARG_0);
+    vm_assign(0, FRAME_ARG_0);
     longjmp(pfp->jmp_buf, LONGJMP_PROG_RETURN);
 }
 
@@ -2517,19 +2562,19 @@ cm_prog_return(unsigned argc)
 void
 env_push(void)
 {
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     string_dict_new(1, 64);
     cons(2, consts.cl.list, R1, env);
-    VM_ASSIGN(env, R2);
+    OBJ_ASSIGN(env, R2);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
 env_pop(void)
 {
-    VM_ASSIGN(env, CDR(env));
+    OBJ_ASSIGN(env, CDR(env));
 }
 
 void
@@ -2537,7 +2582,7 @@ cm_env_push(unsigned argc)
 {
     env_push();
     
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 }
 
 void
@@ -2545,7 +2590,7 @@ cm_env_pop(unsigned argc)
 {
     env_pop();
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 }
 
 obj_t
@@ -2559,13 +2604,13 @@ env_new(obj_t s, obj_t val)
 void
 cm_env_new(unsigned argc)
 {
-    VM_ASSIGN(R0, env_new(FRAME_ARG_0, NIL));
+    vm_assign(0, env_new(FRAME_ARG_0, NIL));
 }
 
 void
 cm_env_new_val(unsigned argc)
 {
-    VM_ASSIGN(R0, env_new(FRAME_ARG_0, FRAME_ARG_1));
+    vm_assign(0, env_new(FRAME_ARG_0, FRAME_ARG_1));
 }
 
 obj_t 
@@ -2598,7 +2643,7 @@ env_at_put(obj_t s, obj_t val)
     obj_t p;
 
     if (p = env_find(s)) {
-        VM_ASSIGN(CDR(p), val);
+        OBJ_ASSIGN(CDR(p), val);
     } else {
         dict_at_put(CAR(env), s, val);
     }
@@ -2613,7 +2658,7 @@ env_del(obj_t s)
 void
 cm_env_at(unsigned argc)
 {
-    VM_ASSIGN(R0, env_at(FRAME_ARG_0));
+    vm_assign(0, env_at(FRAME_ARG_0));
 }
 
 void
@@ -2623,7 +2668,7 @@ cm_env_at_put(unsigned argc)
 
     env_at_put(FRAME_ARG_0, val);
 
-    VM_ASSIGN(R0, val);
+    vm_assign(0, val);
 }
 
 void
@@ -2631,7 +2676,7 @@ cm_env_del(unsigned argc)
 {
     env_del(FRAME_ARG_0);
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 }
 
 /***************************************************************************/
@@ -2661,7 +2706,7 @@ cm_system_debug(unsigned argc)
     debug.parse = val;
     yy_flex_debug = yydebug = debug.parse;
 
-    VM_ASSIGN(R0, arg);
+    vm_assign(0, arg);
 }
 
 void
@@ -2671,7 +2716,7 @@ cm_system_assert(unsigned argc)
 
     assert(inst_of(arg) == consts.cl.boolean && BOOLEAN(arg)->val != 0);
 
-    VM_ASSIGN(R0, arg);
+    vm_assign(0, arg);
 }
 
 void
@@ -2679,7 +2724,7 @@ cm_system_collect(unsigned argc)
 {
     collect();
 
-    VM_ASSIGN(R0, NIL);
+    vm_assign(0, NIL);
 }
 
 #endif
@@ -2721,14 +2766,14 @@ cm_file_new(unsigned argc)
 {
     FILE *_fp;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     string_tocstr(1, FRAME_ARG_0);
     string_tocstr(2, FRAME_ARG_1);
 
     _fp = fopen(STRING(R1)->data, STRING(R2)->data);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 
     vm_inst_alloc(0, consts.cl.file);
     inst_init(R0, _fp);
@@ -2750,7 +2795,7 @@ file_read(FILE *_fp, unsigned len, unsigned linef)
     char     *p;
     unsigned i;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     vm_inst_alloc(1, consts.cl.string);
     inst_init(R1, len);
@@ -2766,7 +2811,7 @@ file_read(FILE *_fp, unsigned len, unsigned linef)
     integer_new(2, i);
     cons(0, consts.cl.pair, R2, R1);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 void
@@ -2806,7 +2851,7 @@ cm_module_new(unsigned argc)
 {
     void *ptr;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     vm_inst_alloc(0, consts.cl.module);
     string_tocstr(1, FRAME_ARG_0);
@@ -2814,7 +2859,7 @@ cm_module_new(unsigned argc)
     ASSERT(ptr != 0);
     inst_init(R0, ptr);
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 /***************************************************************************/
@@ -3206,81 +3251,81 @@ const struct init_inst_var init_inst_var_tbl[] = {
 void
 init_cls(const struct init_cl *tbl, unsigned n)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     for ( ; n; --n, ++tbl) {
         vm_inst_alloc(1, consts.cl.metaclass);
-        vm_assign(tbl->pcl, R1);
+        obj_assign(tbl->pcl, R1);
         CLASS(*tbl->pcl)->inst_size = tbl->inst_size;
         CLASS(*tbl->pcl)->inst_init = tbl->inst_init;
         CLASS(*tbl->pcl)->inst_walk = tbl->inst_walk;
         CLASS(*tbl->pcl)->inst_free = tbl->inst_free;
-        VM_ASSIGN(CLASS(*tbl->pcl)->parent, *tbl->pparent);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->parent, *tbl->pparent);
         string_dict_new(1, 16);
-        VM_ASSIGN(CLASS(*tbl->pcl)->cl_methods, R1);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->cl_methods, R1);
         string_dict_new(1, 16);
-        VM_ASSIGN(CLASS(*tbl->pcl)->inst_methods, R1);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->inst_methods, R1);
         string_dict_new(1, 16);
-        VM_ASSIGN(CLASS(*tbl->pcl)->cl_vars, R1);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->cl_vars, R1);
         string_dict_new(1, 16);
-        VM_ASSIGN(CLASS(*tbl->pcl)->inst_vars, R1);
-        VM_ASSIGN(CLASS(*tbl->pcl)->name, *tbl->pname);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->inst_vars, R1);
+        OBJ_ASSIGN(CLASS(*tbl->pcl)->name, *tbl->pname);
         env_at_put(*tbl->pname, *tbl->pcl);
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
 init_strs(const struct init_str *tbl, unsigned n)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     for ( ; n; --n, ++tbl) {
         string_new(1, 1, strlen(tbl->str), (char *) tbl->str);
-        vm_assign(tbl->pobj, R1);
+        obj_assign(tbl->pobj, R1);
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
 init_cl_methods(const struct init_method *tbl, unsigned n)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     for ( ; n; --n, ++tbl) {
         code_method_new(1, tbl->func);
         dict_at_put(CLASS(*tbl->pcl)->cl_methods, *tbl->psel, R1);
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
 init_inst_methods(const struct init_method *tbl, unsigned n)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     for ( ; n; --n, ++tbl) {
         code_method_new(1, tbl->func);
         dict_at_put(CLASS(*tbl->pcl)->inst_methods, *tbl->psel, R1);
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
 init_inst_vars(const struct init_inst_var *tbl, unsigned n)
 {
-    VM_PUSH(R1);
+    vm_push(1);
 
     for ( ; n; --n, ++tbl) {
         integer_new(1, tbl->ofs);
         dict_at_put(CLASS(*tbl->pcl)->inst_vars, *tbl->psel, R1);
     }
 
-    VM_POP(R1);
+    vm_pop(1);
 }
 
 void
@@ -3300,7 +3345,7 @@ env_init(void)
 
     root_add(&consts.hdr, (sizeof(consts) - sizeof(consts.hdr)) / sizeof(obj_t));
 
-    VM_ASSIGN(consts.cl.metaclass, (obj_t) zcmalloc(sizeof(struct inst_metaclass)));
+    OBJ_ASSIGN(consts.cl.metaclass, (obj_t) zcmalloc(sizeof(struct inst_metaclass)));
     list_insert(&consts.cl.metaclass->list_node, LIST_END(OBJ_LIST_ACTIVE));
     CLASS(consts.cl.metaclass)->inst_size = sizeof(struct inst_metaclass);
     CLASS(consts.cl.metaclass)->inst_init = inst_init_passthru;
@@ -3308,35 +3353,35 @@ env_init(void)
     CLASS(consts.cl.metaclass)->inst_free = inst_free_passthru;
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         vm_inst_alloc(0, consts.cl.metaclass);
-        vm_assign(init_cl_tbl[i].pcl, R0);
+        obj_assign(init_cl_tbl[i].pcl, R0);
         CLASS(*init_cl_tbl[i].pcl)->inst_size = init_cl_tbl[i].inst_size;
         CLASS(*init_cl_tbl[i].pcl)->inst_init = init_cl_tbl[i].inst_init;
         CLASS(*init_cl_tbl[i].pcl)->inst_walk = init_cl_tbl[i].inst_walk;
         CLASS(*init_cl_tbl[i].pcl)->inst_free = init_cl_tbl[i].inst_free;
     }
 
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->parent, consts.cl.object);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->parent, consts.cl.object);
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
-        if (init_cl_tbl[i].pparent)  VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->parent, *init_cl_tbl[i].pparent);
+        if (init_cl_tbl[i].pparent)  OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->parent, *init_cl_tbl[i].pparent);
     }
 
     string_dict_new(0, 16);
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->cl_methods, R0);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->cl_methods, R0);
     string_dict_new(0, 16);
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->inst_methods, R0);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->inst_methods, R0);
     string_dict_new(0, 16);
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->cl_vars, R0);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->cl_vars, R0);
     string_dict_new(0, 16);
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->inst_vars, R0);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->inst_vars, R0);
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         string_dict_new(0, 16);
-        VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->cl_methods, R0);
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->cl_methods, R0);
         string_dict_new(0, 16);
-        VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->inst_methods, R0);
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->inst_methods, R0);
         string_dict_new(0, 16);
-        VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->cl_vars, R0);
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->cl_vars, R0);
         string_dict_new(0, 16);
-        VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->inst_vars, R0);
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->inst_vars, R0);
     }
 
     init_strs(init_str_tbl, ARRAY_SIZE(init_str_tbl));
@@ -3345,7 +3390,7 @@ env_init(void)
     init_inst_methods(init_inst_method_tbl, ARRAY_SIZE(init_inst_method_tbl));
     init_inst_vars(init_inst_var_tbl, ARRAY_SIZE(init_inst_var_tbl));
 
-    VM_ASSIGN(env, 0);
+    OBJ_ASSIGN(env, 0);
     env_push();
 
     env_at_put(consts.str.nil, NIL);
@@ -3354,10 +3399,10 @@ env_init(void)
     boolean_new(1, 0);
     env_at_put(consts.str._false, R1);
 
-    VM_ASSIGN(CLASS(consts.cl.metaclass)->name, consts.str.Metaclass);
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->name, consts.str.Metaclass);
     env_at_put(consts.str.Metaclass, consts.cl.metaclass);
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
-        VM_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->name, *init_cl_tbl[i].pname);
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->name, *init_cl_tbl[i].pname);
         env_at_put(*init_cl_tbl[i].pname, *init_cl_tbl[i].pcl);
     }
 }
