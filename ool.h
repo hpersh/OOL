@@ -109,16 +109,7 @@ struct inst_module {
 };
 #define MODULE(obj)  ((struct inst_module *)(obj))
 
-#define FRAME_IDX_ARGS  (-1)
-#define FRAME_IDX_SEL   (-2)
-#define FRAME_ARGS      (fp[FRAME_IDX_ARGS])
-#define FRAME_SEL       (fp[FRAME_IDX_SEL])
-#define FRAME_RECVR     (CAR(FRAME_ARGS))
-#define FRAME_ARG_0     (CAR(CDR(FRAME_ARGS)))
-#define FRAME_ARG_1     (CAR(CDR(CDR(FRAME_ARGS))))
-#define FRAME_ARG_2     (CAR(CDR(CDR(CDR(FRAME_ARGS)))))
-
-obj_t *sp, *fp;
+obj_t *sp;
 obj_t env;
 
 obj_t regs[8];
@@ -194,7 +185,6 @@ struct consts {
         obj_t dict;
         obj_t file;
         obj_t module;
-	obj_t prog;
         obj_t env;
         obj_t system;
     } cl;
@@ -215,7 +205,6 @@ struct consts {
         obj_t Module;
         obj_t Object;
         obj_t Pair;
-	obj_t Prog;
         obj_t String;
         obj_t System;
         obj_t addc;
@@ -225,7 +214,7 @@ struct consts {
         obj_t atc;
 	obj_t atc_lengthc;
         obj_t atc_putc;
-	obj_t breakc;
+	obj_t _break;
         obj_t car;
         obj_t cdr;
 	obj_t chr;
@@ -279,7 +268,7 @@ struct consts {
         obj_t readc;
         obj_t readlnc;
 	obj_t reducec_initc;
-	obj_t returnc;
+	obj_t _return;
 	obj_t rindexc;
         obj_t shellc;
 	obj_t splicec;
@@ -289,7 +278,7 @@ struct consts {
         obj_t tostring;
         obj_t tostringc;
         obj_t _true;
-	obj_t whilec_doc;
+	obj_t whilec;
         
 #ifdef DEBUG
         obj_t assertc;

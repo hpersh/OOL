@@ -31,6 +31,38 @@ int yyparse();
 
 /***************************************************************************/
 
+enum fatal_errcode {
+    FATAL_ERR_NO_MEM,
+    FATAL_ERR_STACK_OVERFLOW,
+    FATAL_ERR_STACK_UNDERFLOW
+};
+
+void
+fatal(enum fatal_errcode errcode)
+{
+    char *msg;
+
+    switch (errcode) {
+    case FATAL_ERR_NO_MEM:
+	msg = "Out of memory";
+	break;
+    case FATAL_ERR_STACK_OVERFLOW:
+	msg = "Stack overflow";
+	break;
+    case FATAL_ERR_STACK_UNDERFLOW:
+	msg = "Stack underflow";
+	break;
+    default:
+	ASSERT(0);
+    }
+
+    fprintf(stderr, "%s\n", msg);
+
+    abort();
+}
+
+/***************************************************************************/
+
 #define LIST_FIRST(list)  ((list)->next)
 #define LIST_LAST(list)   ((list)->prev)
 #define LIST_END(list)    (list)
@@ -203,7 +235,7 @@ cmalloc(unsigned size)
     }
 
     if (result == 0 && ((result = malloc(size)) == 0)) {
-        ASSERT(0);          /* Out of memory */
+	fatal(FATAL_ERR_NO_MEM);
     }
 
     if (!initf)  ++alloc_cnt;
@@ -454,7 +486,8 @@ vm_inst_alloc(unsigned dst, obj_t cl)
 void
 vm_pushl(obj_t obj)
 {
-    ASSERT(sp > stack);
+    if (sp <= stack)  fatal(FATAL_ERR_STACK_OVERFLOW);
+
     VM_STATS_UPDATE_PUSH(1);
 
     *--sp = obj_retain(obj);
@@ -471,7 +504,8 @@ vm_pushm(unsigned src, unsigned n)
 {
     obj_t *p;
 
-    ASSERT((sp - n) >= stack);
+    if ((sp - n) < stack)  fatal(FATAL_ERR_STACK_OVERFLOW);
+
     VM_STATS_UPDATE_PUSH(n);
 
     for (p = &regs[src]; n; --n, ++p)  *--sp = obj_retain(*p);
@@ -480,7 +514,8 @@ vm_pushm(unsigned src, unsigned n)
 void
 vm_pop(unsigned dst)
 {
-    ASSERT(sp < stack_end);
+    if (sp >= stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+
     VM_STATS_UPDATE_POP(1);
 
     _obj_assign(&regs[dst], *sp++);
@@ -491,7 +526,8 @@ vm_popm(unsigned dst, unsigned n)
 {
     obj_t *p;
 
-    ASSERT((sp + n) <= stack_end);
+    if ((sp + n) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+
     VM_STATS_UPDATE_POP(n);
 
     for (p = &regs[dst + n - 1]; n; --n, --p)  _obj_assign(p, *sp++);
@@ -500,7 +536,8 @@ vm_popm(unsigned dst, unsigned n)
 void
 vm_drop(void)
 {
-    ASSERT(sp < stack_end);
+    if (sp >= stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+
     VM_STATS_UPDATE_POP(1);
 
     obj_release(*sp++);
@@ -509,7 +546,8 @@ vm_drop(void)
 void
 vm_dropn(unsigned n)
 {
-    ASSERT((sp + n) <= stack_end);
+    if ((sp + n) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+
     VM_STATS_UPDATE_POP(n);
 
     for (; n; --n)  obj_release(*sp++);
@@ -517,15 +555,40 @@ vm_dropn(unsigned n)
 
 /***************************************************************************/
 
-#define FRAME_BEGIN                             \
-    {                                           \
-        obj_t *__old_fp = fp;                   \
-        fp = sp;
+enum errcode {
+    ERR_SYM_NOT_BOUND,
+    ERR_NO_METHOD,
+    ERR_INVALID_METHOD
+};
 
-#define FRAME_END                               \
-        while (sp < fp)  vm_drop();             \
-        fp = __old_fp;                          \
+void error(enum errcode errcode, ...);
+
+/***************************************************************************/
+
+struct mc_frame {
+    struct mc_frame *prev;
+    obj_t           sel, args;
+} *mcfp;
+
+#define MC_FRAME_BEGIN(s, a)			\
+    {                                           \
+	struct mc_frame __mcf[1];		\
+						\
+	__mcf->prev = mcfp;			\
+	mcfp = __mcf;				\
+	mcfp->sel  = (s);			\
+	mcfp->args = (a);			
+
+#define MC_FRAME_END				\
+        mcfp = mcfp->prev;			\
     }
+
+#define MC_FRAME_SEL       (mcfp->sel)
+#define MC_FRAME_ARGS      (mcfp->args)
+#define MC_FRAME_RECVR     (CAR(MC_FRAME_ARGS))
+#define MC_FRAME_ARG_0     (CAR(CDR(MC_FRAME_ARGS)))
+#define MC_FRAME_ARG_1     (CAR(CDR(CDR(MC_FRAME_ARGS))))
+#define MC_FRAME_ARG_2     (CAR(CDR(CDR(CDR(MC_FRAME_ARGS)))))
 
 void method_call_0(obj_t recvr, obj_t sel);
 void method_call_1(obj_t recvr, obj_t sel, obj_t arg1);
@@ -534,6 +597,19 @@ void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
 unsigned string_hash(obj_t s), string_equal(obj_t s1, obj_t s2);
 obj_t dict_at(obj_t dict, obj_t key);
 void  dict_at_put(obj_t dict, obj_t key, obj_t val);
+
+void
+bt_print(void)
+{
+    struct mc_frame *p;
+
+    printf("Backtrace:\n");
+    for (p = mcfp; p; p = p->prev) {
+	method_call_0(p->sel, consts.str.print);
+	method_call_0(p->args, consts.str.print);
+	printf("\n");
+    }
+}
 
 void
 method_run(obj_t func, unsigned argc)
@@ -545,18 +621,18 @@ method_run(obj_t func, unsigned argc)
     }
 
     if (inst_of(func) == consts.cl.block) {
-        method_call_1(func, consts.str.evalc, FRAME_ARGS);
+        method_call_1(func, consts.str.evalc, MC_FRAME_ARGS);
 
         return;
     }
 
-    ASSERT(0);                  /* Invalid method type */
+    error(ERR_INVALID_METHOD, func);
 }
 
 void
 method_call(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, sel = FRAME_SEL, cl;
+    obj_t recvr = MC_FRAME_RECVR, sel = MC_FRAME_SEL, cl;
     unsigned sel_with_colon = 0;
 
     vm_push(1);
@@ -575,7 +651,7 @@ method_call(unsigned argc)
 
             if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
 		if (sel_with_colon) {
-		    OBJ_ASSIGN(CDR(obj), FRAME_ARG_0);
+		    OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
 		}
 		vm_assign(0, CDR(obj));
 		goto done;
@@ -595,7 +671,7 @@ method_call(unsigned argc)
             obj_t *p = (obj_t *)((char *) recvr + INTEGER(CDR(obj))->val);
 
             if (sel_with_colon) {
-                obj_assign(p, FRAME_ARG_0);
+                obj_assign(p, MC_FRAME_ARG_0);
             }
             vm_assign(0, *p);
             goto done;
@@ -607,7 +683,7 @@ method_call(unsigned argc)
         }
     }
 
-    ASSERT(0);                  /* Method not found */
+    error(ERR_NO_METHOD, sel);
 
  done:
     vm_pop(1);
@@ -616,37 +692,78 @@ method_call(unsigned argc)
 void
 method_call_0(obj_t recvr, obj_t sel)
 {
-    FRAME_BEGIN {
-        cons(0, consts.cl.list, recvr, NIL);
-        vm_push(0);
-        vm_pushl(sel);
+    vm_pushl(sel);
+    cons(0, consts.cl.list, recvr, NIL);
+    vm_push(0);
+    MC_FRAME_BEGIN(sp[1], sp[0]) {
         method_call(0);
-    } FRAME_END;
+    } MC_FRAME_END;
+    vm_dropn(2);
 }
 
 void
 method_call_1(obj_t recvr, obj_t sel, obj_t arg)
 {
-    FRAME_BEGIN {
-        cons(0, consts.cl.list, arg, NIL);
-        cons(0, consts.cl.list, recvr, R0);
-        vm_push(0);
-        vm_pushl(sel);
+    vm_pushl(sel);
+    cons(0, consts.cl.list, arg, NIL);
+    cons(0, consts.cl.list, recvr, R0);
+    vm_push(0);
+    MC_FRAME_BEGIN(sp[1], sp[0]) {
         method_call(1);
-    } FRAME_END;
+    } MC_FRAME_END;
+    vm_dropn(2);
 }
 
 void
 method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
 {
-    FRAME_BEGIN {
-        cons(0, consts.cl.list, arg2, NIL);
-        cons(0, consts.cl.list, arg1, R0);
-        cons(0, consts.cl.list, recvr, R0);
-        vm_push(0);
-        vm_pushl(sel);
+    vm_pushl(sel);
+    cons(0, consts.cl.list, arg2, NIL);
+    cons(0, consts.cl.list, arg1, R0);
+    cons(0, consts.cl.list, recvr, R0);
+    vm_push(0);
+    MC_FRAME_BEGIN(sp[1], sp[0]) {
         method_call(2);
-    } FRAME_END;
+    } MC_FRAME_END;
+    vm_dropn(2);
+}
+
+/***************************************************************************/
+
+void
+error(enum errcode errcode, ...)
+{
+    va_list ap;
+    obj_t   obj;
+
+    va_start(ap, errcode);
+
+    switch (errcode) {
+    case ERR_SYM_NOT_BOUND:
+	printf("Symbol not bound: ");
+	obj = va_arg(ap, obj_t);
+	method_call_0(obj, consts.str.print);
+	break;
+    case ERR_NO_METHOD:
+	printf("No such method: ");
+	obj = va_arg(ap, obj_t);
+	method_call_0(obj, consts.str.print);
+	break;
+    case ERR_INVALID_METHOD:
+	printf("Invalid method: ");
+	obj = va_arg(ap, obj_t);
+	method_call_0(obj, consts.str.print);
+	break;
+    default:
+	ASSERT(0);
+    }
+
+    printf("\n");
+    bt_print();
+
+    va_end(ap);
+
+    ASSERT(0);
 }
 
 /***************************************************************************/
@@ -674,37 +791,37 @@ inst_free_object(obj_t cl, obj_t inst)
 void
 cm_object_new(unsigned argc)
 {
-    vm_inst_alloc(0, FRAME_RECVR);
+    vm_inst_alloc(0, MC_FRAME_RECVR);
 }
 
 void
 cm_object_quote(unsigned argc)
 {
-    vm_assign(0, FRAME_RECVR);
+    vm_assign(0, MC_FRAME_RECVR);
 }
 
 void
 cm_object_eval(unsigned argc)
 {
-    vm_assign(0, FRAME_RECVR);
+    vm_assign(0, MC_FRAME_RECVR);
 }
 
 void
 cm_object_instof(unsigned argc)
 {
-    vm_assign(0, inst_of(FRAME_RECVR));
+    vm_assign(0, inst_of(MC_FRAME_RECVR));
 }
 
 void
 cm_object_eq(unsigned argc)
 {
-    boolean_new(0, FRAME_RECVR == FRAME_ARG_0);
+    boolean_new(0, MC_FRAME_RECVR == MC_FRAME_ARG_0);
 }
 
 void
 cm_object_tostring(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, cl_name;
+    obj_t recvr = MC_FRAME_RECVR, cl_name;
     char  buf[64];
 
     if (recvr == NIL) {
@@ -722,7 +839,7 @@ cm_object_tostring(unsigned argc)
 void
 cm_object_print(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     method_call_0(recvr, consts.str.tostring);
     method_call_0(R0, consts.str.print);
@@ -733,10 +850,10 @@ cm_object_print(unsigned argc)
 void
 cm_object_append(unsigned argc)
 {
-    ASSERT(FRAME_RECVR == NIL);
-    ASSERT(inst_of(FRAME_ARG_0) == consts.cl.list);
+    ASSERT(MC_FRAME_RECVR == NIL);
+    ASSERT(inst_of(MC_FRAME_ARG_0) == consts.cl.list);
 
-    vm_assign(0, FRAME_ARG_0);
+    vm_assign(0, MC_FRAME_ARG_0);
 }
 
 /***************************************************************************/
@@ -771,13 +888,13 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 cm_metaclass_name(unsigned argc)
 {
-    vm_assign(0, CLASS(FRAME_RECVR)->name);
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
 }
 
 void
 cm_metaclass_parent(unsigned argc)
 {
-    vm_assign(0, CLASS(FRAME_RECVR)->parent);
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->parent);
 }
 
 void dict_keys(obj_t dict);
@@ -796,7 +913,7 @@ cm_meta_metaclass_inst_vars(unsigned argc)
 void
 cm_metaclass_inst_vars(unsigned argc)
 {
-    dict_keys(CLASS(FRAME_RECVR)->inst_vars);
+    dict_keys(CLASS(MC_FRAME_RECVR)->inst_vars);
 }
 
 void
@@ -827,8 +944,8 @@ cm_metaclass_new(unsigned argc)
     vm_push(1);
 
     vm_inst_alloc(0, consts.cl.metaclass);
-    OBJ_ASSIGN(CLASS(R0)->name,   FRAME_ARG_0);
-    OBJ_ASSIGN(CLASS(R0)->parent, FRAME_ARG_1);
+    OBJ_ASSIGN(CLASS(R0)->name,   MC_FRAME_ARG_0);
+    OBJ_ASSIGN(CLASS(R0)->parent, MC_FRAME_ARG_1);
     env_new(CLASS(R0)->name, R0);
     string_dict_new(1, 16);
     OBJ_ASSIGN(CLASS(R0)->cl_methods, R1);
@@ -838,7 +955,7 @@ cm_metaclass_new(unsigned argc)
     OBJ_ASSIGN(CLASS(R0)->inst_methods, R1);
     string_dict_new(1, 16);
     OBJ_ASSIGN(CLASS(R0)->inst_vars, R1);
-    for (inst_size = CLASS(CLASS(R0)->parent)->inst_size, p = FRAME_ARG_2;
+    for (inst_size = CLASS(CLASS(R0)->parent)->inst_size, p = MC_FRAME_ARG_2;
          p;
          p = CDR(p), inst_size += sizeof(obj_t)
          ) {
@@ -876,12 +993,14 @@ unsigned list_len(obj_t);
 void
 cm_code_method_eval(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, args = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, args = MC_FRAME_ARG_0;
 
-    FRAME_BEGIN {
-        vm_pushl(args);
+    vm_pushl(recvr);
+    vm_pushl(args);
+    MC_FRAME_BEGIN(sp[1], sp[0]) {
         (*CODE_METHOD(recvr)->func)(list_len(args));
-    } FRAME_END;
+    } MC_FRAME_END;
+    vm_dropn(2);
 }
 
 /**********************************************************************/
@@ -905,32 +1024,32 @@ boolean_new(unsigned dst, unsigned val)
 void
 cm_boolean_and(unsigned argc)
 {
-    boolean_new(0, BOOLEAN(FRAME_RECVR)->val && BOOLEAN(FRAME_ARG_0)->val);
+    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val && BOOLEAN(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_boolean_or(unsigned argc)
 {
-    boolean_new(0, BOOLEAN(FRAME_RECVR)->val || BOOLEAN(FRAME_ARG_0)->val);
+    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val || BOOLEAN(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_boolean_not(unsigned argc)
 {
-    boolean_new(0, !BOOLEAN(FRAME_RECVR)->val);
+    boolean_new(0, !BOOLEAN(MC_FRAME_RECVR)->val);
 }
 
 void
 cm_boolean_tostring(unsigned argc)
 {
-    vm_assign(0, BOOLEAN(FRAME_RECVR)->val ? consts.str._true : consts.str._false);
+    vm_assign(0, BOOLEAN(MC_FRAME_RECVR)->val ? consts.str._true : consts.str._false);
 }
 
 void
 cm_boolean_if(unsigned argc)
 {
-    if (BOOLEAN(FRAME_RECVR)->val) {
-	method_call_0(FRAME_ARG_0, consts.str.eval);
+    if (BOOLEAN(MC_FRAME_RECVR)->val) {
+	method_call_0(MC_FRAME_ARG_0, consts.str.eval);
     } else {
 	vm_assign(0, NIL);
     }
@@ -939,7 +1058,7 @@ cm_boolean_if(unsigned argc)
 void
 cm_boolean_if_else(unsigned argc)
 {
-    method_call_0(BOOLEAN(FRAME_RECVR)->val ? FRAME_ARG_0 : FRAME_ARG_1, consts.str.eval);
+    method_call_0(BOOLEAN(MC_FRAME_RECVR)->val ? MC_FRAME_ARG_0 : MC_FRAME_ARG_1, consts.str.eval);
 }
 
 /***************************************************************************/
@@ -970,7 +1089,7 @@ cm_integer_new(unsigned argc)
         return;
     }
 
-    arg = FRAME_ARG_0;
+    arg = MC_FRAME_ARG_0;
     
     if (inst_of(arg) == consts.cl.integer) {
         integer_new(0, INTEGER(arg)->val);
@@ -1010,14 +1129,14 @@ cm_integer_tostring(unsigned argc)
 {
     char buf[32];
 
-    string_new(0, 1, snprintf(buf, sizeof(buf), "%lld", INTEGER(FRAME_RECVR)->val), buf);
+    string_new(0, 1, snprintf(buf, sizeof(buf), "%lld", INTEGER(MC_FRAME_RECVR)->val), buf);
 }
 
 void
 cm_integer_tostring_base(unsigned argc)
 {
-    long long val  = INTEGER(FRAME_RECVR)->val;
-    long long base = INTEGER(FRAME_ARG_0)->val;
+    long long val  = INTEGER(MC_FRAME_RECVR)->val;
+    long long base = INTEGER(MC_FRAME_ARG_0)->val;
     char      buf[32], *p;
     unsigned  n;
 
@@ -1047,54 +1166,54 @@ cm_integer_tostring_base(unsigned argc)
 void
 cm_integer_hash(unsigned argc)
 {
-    vm_assign(0, FRAME_RECVR);
+    vm_assign(0, MC_FRAME_RECVR);
 }
 
 void
 cm_integer_equals(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
 		inst_of(arg) == consts.cl.integer
-		&& INTEGER(FRAME_RECVR)->val == INTEGER(arg)->val
+		&& INTEGER(MC_FRAME_RECVR)->val == INTEGER(arg)->val
 		);
 }
 
 void
 cm_integer_minus(unsigned argc)
 {
-    integer_new(0, -INTEGER(FRAME_RECVR)->val);
+    integer_new(0, -INTEGER(MC_FRAME_RECVR)->val);
 }
 
 void
 cm_integer_add(unsigned argc)
 {
-    integer_new(0, INTEGER(FRAME_RECVR)->val + INTEGER(FRAME_ARG_0)->val);
+    integer_new(0, INTEGER(MC_FRAME_RECVR)->val + INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_sub(unsigned argc)
 {
-    integer_new(0, INTEGER(FRAME_RECVR)->val - INTEGER(FRAME_ARG_0)->val);
+    integer_new(0, INTEGER(MC_FRAME_RECVR)->val - INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_mult(unsigned argc)
 {
-    integer_new(0, INTEGER(FRAME_RECVR)->val * INTEGER(FRAME_ARG_0)->val);
+    integer_new(0, INTEGER(MC_FRAME_RECVR)->val * INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_div(unsigned argc)
 {
-    integer_new(0, INTEGER(FRAME_RECVR)->val / INTEGER(FRAME_ARG_0)->val);
+    integer_new(0, INTEGER(MC_FRAME_RECVR)->val / INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_mod(unsigned argc)
 {
-    integer_new(0, INTEGER(FRAME_RECVR)->val % INTEGER(FRAME_ARG_0)->val);
+    integer_new(0, INTEGER(MC_FRAME_RECVR)->val % INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
@@ -1119,25 +1238,25 @@ integer_range(long long init, long long lim, long long step)
 void
 cm_integer_range(unsigned argc)
 {
-    integer_range(0, INTEGER(FRAME_RECVR)->val, 1);
+    integer_range(0, INTEGER(MC_FRAME_RECVR)->val, 1);
 }
 
 void
 cm_integer_range_init(unsigned argc)
 {
-    integer_range(INTEGER(FRAME_ARG_0)->val, INTEGER(FRAME_RECVR)->val, 1);
+    integer_range(INTEGER(MC_FRAME_ARG_0)->val, INTEGER(MC_FRAME_RECVR)->val, 1);
 }
 
 void
 cm_integer_range_init_step(unsigned argc)
 {
-    integer_range(INTEGER(FRAME_ARG_0)->val, INTEGER(FRAME_RECVR)->val, INTEGER(FRAME_ARG_1)->val);
+    integer_range(INTEGER(MC_FRAME_ARG_0)->val, INTEGER(MC_FRAME_RECVR)->val, INTEGER(MC_FRAME_ARG_1)->val);
 }
 
 void
 cm_integer_chr(unsigned argc)
 {
-    char c = INTEGER(FRAME_RECVR)->val;
+    char c = INTEGER(MC_FRAME_RECVR)->val;
 
     string_new(0, 1, 1, &c);
 }
@@ -1145,25 +1264,25 @@ cm_integer_chr(unsigned argc)
 void
 cm_integer_lt(unsigned argc)
 {
-    boolean_new(0, INTEGER(FRAME_RECVR)->val < INTEGER(FRAME_ARG_0)->val);
+    boolean_new(0, INTEGER(MC_FRAME_RECVR)->val < INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_gt(unsigned argc)
 {
-    boolean_new(0, INTEGER(FRAME_RECVR)->val > INTEGER(FRAME_ARG_0)->val);
+    boolean_new(0, INTEGER(MC_FRAME_RECVR)->val > INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_le(unsigned argc)
 {
-    boolean_new(0, INTEGER(FRAME_RECVR)->val <= INTEGER(FRAME_ARG_0)->val);
+    boolean_new(0, INTEGER(MC_FRAME_RECVR)->val <= INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_integer_ge(unsigned argc)
 {
-    boolean_new(0, INTEGER(FRAME_RECVR)->val >= INTEGER(FRAME_ARG_0)->val);
+    boolean_new(0, INTEGER(MC_FRAME_RECVR)->val >= INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 /***************************************************************************/
@@ -1194,7 +1313,7 @@ cm_float_new(unsigned argc)
         return;
     }
 
-    arg = FRAME_ARG_0;
+    arg = MC_FRAME_ARG_0;
     
     if (inst_of(arg) == consts.cl._float) {
         float_new(0, FLOAT(arg)->val);
@@ -1222,47 +1341,47 @@ cm_float_new(unsigned argc)
 void
 cm_float_add(unsigned argc)
 {
-    float_new(0, FLOAT(FRAME_RECVR)->val + FLOAT(FRAME_ARG_0)->val);
+    float_new(0, FLOAT(MC_FRAME_RECVR)->val + FLOAT(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_float_sub(unsigned argc)
 {
-    float_new(0, FLOAT(FRAME_RECVR)->val - FLOAT(FRAME_ARG_0)->val);
+    float_new(0, FLOAT(MC_FRAME_RECVR)->val - FLOAT(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_float_mult(unsigned argc)
 {
-    float_new(0, FLOAT(FRAME_RECVR)->val * FLOAT(FRAME_ARG_0)->val);
+    float_new(0, FLOAT(MC_FRAME_RECVR)->val * FLOAT(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_float_div(unsigned argc)
 {
-    float_new(0, FLOAT(FRAME_RECVR)->val / FLOAT(FRAME_ARG_0)->val);
+    float_new(0, FLOAT(MC_FRAME_RECVR)->val / FLOAT(MC_FRAME_ARG_0)->val);
 }
 
 void
 cm_float_minus(unsigned argc)
 {
-    float_new(0, -FLOAT(FRAME_RECVR)->val);
+    float_new(0, -FLOAT(MC_FRAME_RECVR)->val);
 }
 
 void
 cm_float_hash(unsigned argc)
 {
-    integer_new(0, (long long) FLOAT(FRAME_RECVR)->val);
+    integer_new(0, (long long) FLOAT(MC_FRAME_RECVR)->val);
 }
 
 void
 cm_float_equals(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
 		inst_of(arg) == consts.cl._float
-		&& FLOAT(FRAME_RECVR)->val == FLOAT(arg)->val
+		&& FLOAT(MC_FRAME_RECVR)->val == FLOAT(arg)->val
 		);
 }
 
@@ -1271,7 +1390,7 @@ cm_float_tostring(unsigned argc)
 {
     char buf[64];
 
-    string_new(0, 1, snprintf(buf, sizeof(buf), "%Lg", FLOAT(FRAME_RECVR)->val), buf);
+    string_new(0, 1, snprintf(buf, sizeof(buf), "%Lg", FLOAT(MC_FRAME_RECVR)->val), buf);
 }
 
 /***************************************************************************/
@@ -1354,7 +1473,7 @@ string_hash(obj_t s)
 void
 cm_string_hash(unsigned argc)
 {
-    integer_new(0, string_hash(FRAME_RECVR));
+    integer_new(0, string_hash(MC_FRAME_RECVR));
 }
 
 unsigned
@@ -1370,24 +1489,24 @@ string_equal(obj_t s1, obj_t s2)
 void
 cm_string_equal(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
 		inst_of(arg) == consts.cl.string
-		&& string_equal(FRAME_RECVR, arg)
+		&& string_equal(MC_FRAME_RECVR, arg)
 		);
 }
 
 void
 cm_string_tostring(unsigned argc)
 {
-    vm_assign(0, FRAME_RECVR);
+    vm_assign(0, MC_FRAME_RECVR);
 }
 
 void
 cm_string_append(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
 
     string_new(0, 2, STRING(recvr)->size, STRING(recvr)->data,
                      STRING(arg)->size, STRING(arg)->data
@@ -1399,13 +1518,13 @@ obj_t env_at(obj_t s);
 void
 cm_string_eval(unsigned argc)
 {
-    vm_assign(0, env_at(FRAME_RECVR));
+    vm_assign(0, env_at(MC_FRAME_RECVR));
 }
 
 void
 cm_string_print(unsigned argc)
 {
-    obj_t    recvr = FRAME_RECVR;
+    obj_t    recvr = MC_FRAME_RECVR;
     char     *p, c;
     unsigned n;
 
@@ -1425,7 +1544,7 @@ cm_string_print(unsigned argc)
 void
 cm_string_len(unsigned argc)
 {
-    integer_new(0, STRING(FRAME_RECVR)->size);
+    integer_new(0, STRING(MC_FRAME_RECVR)->size);
 }
 
 void
@@ -1441,32 +1560,32 @@ string_substr(obj_t s, int ofs, int len)
 void
 cm_string_at(unsigned argc)
 {
-    string_substr(FRAME_RECVR, INTEGER(FRAME_ARG_0)->val, 1);
+    string_substr(MC_FRAME_RECVR, INTEGER(MC_FRAME_ARG_0)->val, 1);
 }
 
 void
 cm_string_at_len(unsigned argc)
 {
-    string_substr(FRAME_RECVR, INTEGER(FRAME_ARG_0)->val, INTEGER(FRAME_ARG_1)->val);
+    string_substr(MC_FRAME_RECVR, INTEGER(MC_FRAME_ARG_0)->val, INTEGER(MC_FRAME_ARG_1)->val);
 }
 
 void
 cm_string_asc(unsigned arg)
 {
-    integer_new(0, STRING(FRAME_RECVR)->data[0]);
+    integer_new(0, STRING(MC_FRAME_RECVR)->data[0]);
 }
 
 void
 cm_string_foreach(unsigned argc)
 {
-    obj_t    arg = FRAME_ARG_0, *p;
+    obj_t    arg = MC_FRAME_ARG_0, *p;
     char     *s;
     unsigned n;
 
     vm_pushm(1, 3);
 
     vm_assign(1, NIL);
-    for (p = &R1, s = STRING(FRAME_RECVR)->data, n = STRING(FRAME_RECVR)->size; n; --n, ++s) {
+    for (p = &R1, s = STRING(MC_FRAME_RECVR)->data, n = STRING(MC_FRAME_RECVR)->size; n; --n, ++s) {
 	string_new(3, 1, 1, s);
 	cons(3, consts.cl.list, R3, NIL);
         method_call_1(arg, consts.str.evalc, R3);
@@ -1495,19 +1614,19 @@ string_index(obj_t s1, obj_t s2, unsigned ofs, int dir)
 void
 cm_string_index(unsigned argc)
 {
-    integer_new(0, string_index(FRAME_RECVR, FRAME_ARG_0, 0, 1));
+    integer_new(0, string_index(MC_FRAME_RECVR, MC_FRAME_ARG_0, 0, 1));
 }
 
 void
 cm_string_rindex(unsigned argc)
 {
-    integer_new(0, string_index(FRAME_RECVR, FRAME_ARG_0, 0, -1));
+    integer_new(0, string_index(MC_FRAME_RECVR, MC_FRAME_ARG_0, 0, -1));
 }
 
 void
 cm_string_split(unsigned argc)
 {
-    obj_t    recvr = FRAME_RECVR, arg = FRAME_ARG_0, *p;
+    obj_t    recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, *p;
     unsigned ofs;
 
     vm_pushm(1, 3);
@@ -1554,7 +1673,7 @@ read_eval(void)
 void
 cm_string_load(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     yy_push_str(STRING(recvr)->data, STRING(recvr)->size);
 
@@ -1600,19 +1719,19 @@ inst_walk_dptr(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 cm_dptr_car(unsigned argc)
 {
-    vm_assign(0, CAR(FRAME_RECVR));
+    vm_assign(0, CAR(MC_FRAME_RECVR));
 }
 
 void
 cm_dptr_cdr(unsigned argc)
 {
-    vm_assign(0, CDR(FRAME_RECVR));
+    vm_assign(0, CDR(MC_FRAME_RECVR));
 }
 
 void
 cm_dptr_hash(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     vm_pushm(1, 2);
 
@@ -1628,7 +1747,7 @@ cm_dptr_hash(unsigned argc)
 void
 cm_dptr_equals(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
 
     vm_pushm(1, 2);
 
@@ -1648,7 +1767,7 @@ cm_dptr_equals(unsigned argc)
 void
 cm_pair_eval(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     vm_push(1);
 
@@ -1663,7 +1782,7 @@ cm_pair_eval(unsigned argc)
 void
 cm_pair_tostring(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     vm_pushm(1, 2);
 
@@ -1684,7 +1803,7 @@ cm_pair_tostring(unsigned argc)
 void
 cm_pair_at(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR,  arg = FRAME_ARG_0, result;
+    obj_t recvr = MC_FRAME_RECVR,  arg = MC_FRAME_ARG_0, result;
 
     switch (INTEGER(arg)->val) {
     case 0:
@@ -1717,7 +1836,7 @@ list_len(obj_t list)
 void
 cm_list_len(unsigned argc)
 {
-    integer_new(0, list_len(FRAME_RECVR));
+    integer_new(0, list_len(MC_FRAME_RECVR));
 }
 
 void
@@ -1766,7 +1885,7 @@ list_tostr(obj_t list, char *delim)
 void
 cm_list_tostring(unsigned argc)
 {
-    list_tostr(FRAME_RECVR, "()");
+    list_tostr(MC_FRAME_RECVR, "()");
 }
 
 void
@@ -1790,18 +1909,18 @@ list_eval(obj_t list)
 void
 cm_list_eval(unsigned argc)
 {
-    list_eval(FRAME_RECVR);
+    list_eval(MC_FRAME_RECVR);
 }
 
 void
 cm_list_map(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0, *p, q;
+    obj_t arg = MC_FRAME_ARG_0, *p, q;
 
     vm_pushm(1, 2);
 
     vm_assign(1, NIL);
-    for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
+    for (p = &R1, q = MC_FRAME_RECVR; q; q = CDR(q)) {
         method_call_1(arg, consts.str.evalc, CAR(q));
         cons(2, consts.cl.list, R0, NIL);
         obj_assign(p, R2);
@@ -1815,12 +1934,12 @@ cm_list_map(unsigned argc)
 void
 cm_list_foreach(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0, *p, q;
+    obj_t arg = MC_FRAME_ARG_0, *p, q;
 
     vm_pushm(1, 3);
 
     vm_assign(1, NIL);
-    for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
+    for (p = &R1, q = MC_FRAME_RECVR; q; q = CDR(q)) {
         cons(3, consts.cl.list, CAR(q), NIL);
         method_call_1(arg, consts.str.evalc, R3);
         cons(2, consts.cl.list, R0, NIL);
@@ -1835,7 +1954,7 @@ cm_list_foreach(unsigned argc)
 void
 cm_list_splice(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
 
     vm_pushm(1, 2);
 
@@ -1860,7 +1979,7 @@ cm_list_splice(unsigned argc)
 void
 cm_list_append(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
     obj_t *p, q;
 
     ASSERT(inst_of(arg) == consts.cl.list);
@@ -1868,7 +1987,7 @@ cm_list_append(unsigned argc)
     vm_pushm(1, 2);
 
     vm_assign(1, NIL);
-    for (p = &R1, q = FRAME_RECVR; q; q = CDR(q)) {
+    for (p = &R1, q = MC_FRAME_RECVR; q; q = CDR(q)) {
         cons(2, consts.cl.list, CAR(q), NIL);
 	obj_assign(p, R2);
         p = &CDR(R2);
@@ -1882,7 +2001,7 @@ cm_list_append(unsigned argc)
 void
 cm_list_hash(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR;
+    obj_t recvr = MC_FRAME_RECVR;
 
     vm_pushm(1, 2);
 
@@ -1901,7 +2020,7 @@ cm_list_hash(unsigned argc)
 void
 cm_list_equals(unsigned argc)
 {
-    obj_t    recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t    recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
 
     vm_pushm(1, 2);
 
@@ -1924,10 +2043,10 @@ cm_list_equals(unsigned argc)
 void
 cm_list_at(unsigned argc)
 {
-    unsigned i = INTEGER(FRAME_ARG_0)->val;
+    unsigned i = INTEGER(MC_FRAME_ARG_0)->val;
     obj_t    p;
 
-    for (p = FRAME_RECVR; p; p = CDR(p), --i) {
+    for (p = MC_FRAME_RECVR; p; p = CDR(p), --i) {
 	if (i == 0) {
 	    vm_assign(0, CAR(p));
 	    return;
@@ -1940,14 +2059,14 @@ cm_list_at(unsigned argc)
 void
 cm_list_at_len(unsigned argc)
 {
-    unsigned i = INTEGER(FRAME_ARG_0)->val;
-    unsigned n = INTEGER(FRAME_ARG_1)->val;
+    unsigned i = INTEGER(MC_FRAME_ARG_0)->val;
+    unsigned n = INTEGER(MC_FRAME_ARG_1)->val;
     obj_t    p, *q;
 
     vm_pushm(1, 2);
 
     vm_assign(1, NIL);
-    for (q = &R1, p = FRAME_RECVR; p && n; p = CDR(p)) {
+    for (q = &R1, p = MC_FRAME_RECVR; p && n; p = CDR(p)) {
 	if (i > 0) {
 	    --i;
 	    continue;
@@ -1993,7 +2112,7 @@ method_call_new(unsigned dst, obj_t list)
 void
 cm_method_call_new(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     ASSERT(inst_of(arg) == consts.cl.list);
 
@@ -2003,56 +2122,56 @@ cm_method_call_new(unsigned argc)
 void
 cm_method_call_eval(unsigned argc)
 {
-    obj_t arg = METHOD_CALL(FRAME_RECVR)->list;
+    obj_t    arg = METHOD_CALL(MC_FRAME_RECVR)->list;
+    unsigned n, nargs, s, quotef = 0;
+    obj_t    p, *q;
+    char     *r;
 
     vm_pushm(1, 3);
     
-    FRAME_BEGIN {
-        unsigned n, nargs, s, quotef = 0;
-        obj_t    p, *q;
-        char     *r;
-
-        /* Scan to calculate length of selector */
-
-        for (s = 0, n = 0, p = arg; p; p = CDR(p), ++n) {
-            if (n & 1)  s += STRING(CAR(p))->size;
-        }
+    /* Scan to calculate length of selector */
+    
+    for (s = 0, n = 0, p = arg; p; p = CDR(p), ++n) {
+	if (n & 1)  s += STRING(CAR(p))->size;
+    }
+    
+    if (n == 2) {
+	nargs = 0;
         
-        if (n == 2) {
-            nargs = 0;
-            
-            quotef = string_equal(CAR(CDR(arg)), consts.str.quote);
-        } else if (n >= 3) {
-            ASSERT((n & 1) == 1);
-
-            nargs = n >> 1;
-        } else  ASSERT(0);
-
-        vm_assign(1, NIL);
-        vm_inst_alloc(2, consts.cl.string);
-        inst_init(regs[2], s);
-        for (q = &R1, r = STRING(R2)->data, n = 0, p = arg; p; p = CDR(p), ++n) {
-            if (n & 1) {
-                s = STRING(CAR(p))->size;
-                memcpy(r, STRING(CAR(p))->data, s);
-                r += s;
-                continue;
-            }
-
-            cons(3, consts.cl.list, CAR(p), NIL);
-            obj_assign(q, R3);
-            q = &CDR(R3);
-        }
-
-        if (quotef) {
-            vm_push(1);
-        } else {
-            list_eval(R1);
-            vm_push(0);
-        }
-        vm_push(2);
-        method_call(nargs);
-    } FRAME_END;
+	quotef = string_equal(CAR(CDR(arg)), consts.str.quote);
+    } else if (n >= 3) {
+	ASSERT((n & 1) == 1);
+	
+	nargs = n >> 1;
+    } else  ASSERT(0);
+    
+    vm_assign(1, NIL);
+    vm_inst_alloc(2, consts.cl.string);
+    inst_init(regs[2], s);
+    for (q = &R1, r = STRING(R2)->data, n = 0, p = arg; p; p = CDR(p), ++n) {
+	if (n & 1) {
+	    s = STRING(CAR(p))->size;
+	    memcpy(r, STRING(CAR(p))->data, s);
+	    r += s;
+	    continue;
+	}
+	
+	cons(3, consts.cl.list, CAR(p), NIL);
+	obj_assign(q, R3);
+	q = &CDR(R3);
+    }
+    
+    vm_push(2);
+    if (quotef) {
+	vm_push(1);
+    } else {
+	list_eval(R1);
+	vm_push(0);
+    }
+    MC_FRAME_BEGIN(sp[1], sp[0]) {
+	method_call(nargs);
+    } MC_FRAME_END;
+    vm_dropn(2);
 
     vm_popm(1, 3);
 }
@@ -2060,13 +2179,13 @@ cm_method_call_eval(unsigned argc)
 void
 cm_method_call_tostring(unsigned argc)
 {
-    list_tostr(METHOD_CALL(FRAME_RECVR)->list, "[]");
+    list_tostr(METHOD_CALL(MC_FRAME_RECVR)->list, "[]");
 }
 
 void
 cm_list_filter(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0, *p;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, *p;
 
     vm_pushm(1, 2);
 
@@ -2086,12 +2205,12 @@ cm_list_filter(unsigned argc)
 void
 cm_list_reduce(unsigned argc)
 {
-    obj_t body = FRAME_ARG_0, p;
+    obj_t body = MC_FRAME_ARG_0, p;
 
     vm_pushm(1, 2);
     
-    vm_assign(1, FRAME_ARG_1);
-    for (p = FRAME_RECVR; p; p = CDR(p)) {
+    vm_assign(1, MC_FRAME_ARG_1);
+    for (p = MC_FRAME_RECVR; p; p = CDR(p)) {
 	cons(2, consts.cl.list, CAR(p), NIL);
 	cons(2, consts.cl.list, R1, R2);
 	method_call_1(body, consts.str.evalc, R2);
@@ -2105,18 +2224,6 @@ cm_list_reduce(unsigned argc)
 /***************************************************************************/
 
 /* Class: Block */
-
-struct prog_frame {
-    struct prog_frame *prev;
-    jmp_buf           jmp_buf;
-    obj_t             *sp, *fp;
-} *pfp;
-
-enum {
-    LONGJMP_PROG_BREAK = 1,
-    LONGJMP_PROG_CONTINUE,
-    LONGJMP_PROG_RETURN
-};
 
 void
 inst_init_block(obj_t cl, obj_t inst, va_list ap)
@@ -2147,39 +2254,17 @@ void
 cm_block_eval(unsigned argc)
 {
     obj_t p, q;
-    struct prog_frame prog_frame[1];
-    int   rc;
     
     env_push();
     
-    for (p = CAR(BLOCK(FRAME_RECVR)->list), q = FRAME_ARG_0; p; p = CDR(p), q = CDR(q)) {
+    for (p = CAR(BLOCK(MC_FRAME_RECVR)->list), q = MC_FRAME_ARG_0; p; p = CDR(p), q = CDR(q)) {
         env_new(CAR(p), CAR(q));
     }
 
     vm_assign(0, NIL);
-
-    prog_frame->prev = pfp;
-    pfp = prog_frame;
-    pfp->sp = sp;
-    pfp->fp = fp;
-    if ((rc = setjmp(pfp->jmp_buf)) != 0) {
-	while (sp < pfp->sp)  vm_drop();
-	fp = pfp->fp;
-
-	switch (rc) {
-	case LONGJMP_PROG_RETURN:
-	    goto done;
-	default:
-	    ASSERT(0);
-	}
-    }
-
-    for (p = CDR(BLOCK(FRAME_RECVR)->list); p; p = CDR(p)) {
+    for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
         method_call_0(CAR(p), consts.str.eval);
     }
-
- done:    
-    pfp = pfp->prev;
 
     env_pop();
 }
@@ -2187,7 +2272,7 @@ cm_block_eval(unsigned argc)
 void
 cm_block_tostring(unsigned argc)
 {
-    list_tostr(BLOCK(FRAME_RECVR)->list, "{}");
+    list_tostr(BLOCK(MC_FRAME_RECVR)->list, "{}");
 }
 
 /***************************************************************************/
@@ -2232,10 +2317,10 @@ array_new(unsigned dst, unsigned size)
 void
 cm_array_new(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     if (inst_of(arg) == consts.cl.integer) {
-	array_new(0, INTEGER(FRAME_ARG_0)->val);
+	array_new(0, INTEGER(MC_FRAME_ARG_0)->val);
 	return;
     }
     if (inst_of(arg) == consts.cl.list) {
@@ -2255,15 +2340,15 @@ cm_array_new(unsigned argc)
 void
 cm_array_at(unsigned argc)
 {
-    vm_assign(0, ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val]);
+    vm_assign(0, ARRAY(MC_FRAME_RECVR)->data[INTEGER(MC_FRAME_ARG_0)->val]);
 }
 
 void
 cm_array_at_put(unsigned argc)
 {
-    obj_t val = FRAME_ARG_1;
+    obj_t val = MC_FRAME_ARG_1;
 
-    obj_assign(&ARRAY(FRAME_RECVR)->data[INTEGER(FRAME_ARG_0)->val], val);
+    obj_assign(&ARRAY(MC_FRAME_RECVR)->data[INTEGER(MC_FRAME_ARG_0)->val], val);
     
     vm_assign(0, val);
 }
@@ -2277,7 +2362,7 @@ cm_array_tostring(unsigned argc)
     vm_pushm(1, 2);
 
     vm_assign(1, NIL);
-    for (q = &R1, p = ARRAY(FRAME_RECVR)->data, n = ARRAY(FRAME_RECVR)->size; n; --n, ++p) {
+    for (q = &R1, p = ARRAY(MC_FRAME_RECVR)->data, n = ARRAY(MC_FRAME_RECVR)->size; n; --n, ++p) {
 	cons(2, consts.cl.list, *p, NIL);
 	obj_assign(q, R2);
 	q = &CDR(R2);
@@ -2369,7 +2454,7 @@ dict_at(obj_t dict, obj_t key)
 void
 cm_dict_at(unsigned argc)
 {
-    vm_assign(0, dict_at(FRAME_RECVR, FRAME_ARG_0));
+    vm_assign(0, dict_at(MC_FRAME_RECVR, MC_FRAME_ARG_0));
 }
 
 void
@@ -2393,9 +2478,9 @@ dict_at_put(obj_t dict, obj_t key, obj_t val)
 void
 cm_dict_at_put(unsigned argc)
 {
-    obj_t val = FRAME_ARG_1;
+    obj_t val = MC_FRAME_ARG_1;
 
-    dict_at_put(FRAME_RECVR, FRAME_ARG_0, val);
+    dict_at_put(MC_FRAME_RECVR, MC_FRAME_ARG_0, val);
 
     vm_assign(0, val);
 }
@@ -2427,9 +2512,9 @@ dict_del(obj_t dict, obj_t key)
 void
 cm_dict_del(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
-    dict_del(FRAME_RECVR, arg);
+    dict_del(MC_FRAME_RECVR, arg);
 
     vm_assign(0, arg);
 }
@@ -2457,13 +2542,13 @@ dict_keys(obj_t dict)
 void
 cm_dict_keys(unsigned argc)
 {
-    dict_keys(FRAME_RECVR);
+    dict_keys(MC_FRAME_RECVR);
 }
 
 void
 cm_dict_tostring(unsigned argc)
 {
-    obj_t    recvr = FRAME_RECVR, *p, *q, r;
+    obj_t    recvr = MC_FRAME_RECVR, *p, *q, r;
     unsigned n;
 
     vm_push(1);
@@ -2480,79 +2565,6 @@ cm_dict_tostring(unsigned argc)
     method_call_0(R0, consts.str.tostring);
 
     vm_pop(1);
-}
-
-/***************************************************************************/
-
-/* Class: Prog */
-
-void
-cm_prog_while(unsigned argc)
-{
-    obj_t cond = FRAME_ARG_0, body = FRAME_ARG_1;
-    struct prog_frame prog_frame[1];
-    int               rc;
-
-    vm_push(1);
-
-    vm_assign(1, NIL);
-
-    prog_frame->prev = pfp;
-    pfp = prog_frame;
-    pfp->sp = sp;
-    pfp->fp = fp;
-    if ((rc = setjmp(pfp->jmp_buf)) != 0) {
-	while (sp < pfp->sp)  vm_drop();
-	fp = pfp->fp;
-
-	switch (rc) {
-	case LONGJMP_PROG_BREAK:
-	    goto done;
-	case LONGJMP_PROG_CONTINUE:
-	    break;
-	default:
-	    ASSERT(0);
-	}
-    }
-
-    for (;;) {
-	method_call_0(cond, consts.str.eval);
-	if (!BOOLEAN(R0)->val)  break;
-	method_call_0(body, consts.str.eval);
-	vm_assign(1, R0);
-    }
-    vm_assign(0, R1);
-
- done:
-    pfp = pfp->prev;
-
-    vm_pop(1);
-}
-
-void
-cm_prog_break(unsigned argc)
-{
-    ASSERT(pfp != 0);
-
-    vm_assign(0, FRAME_ARG_0);
-    longjmp(pfp->jmp_buf, LONGJMP_PROG_BREAK);
-}
-
-void
-cm_prog_continue(unsigned argc)
-{
-    ASSERT(pfp != 0);
-
-    longjmp(pfp->jmp_buf, LONGJMP_PROG_CONTINUE);
-}
-
-void
-cm_prog_return(unsigned argc)
-{
-    ASSERT(pfp != 0);
-
-    vm_assign(0, FRAME_ARG_0);
-    longjmp(pfp->jmp_buf, LONGJMP_PROG_RETURN);
 }
 
 /***************************************************************************/
@@ -2604,13 +2616,13 @@ env_new(obj_t s, obj_t val)
 void
 cm_env_new(unsigned argc)
 {
-    vm_assign(0, env_new(FRAME_ARG_0, NIL));
+    vm_assign(0, env_new(MC_FRAME_ARG_0, NIL));
 }
 
 void
 cm_env_new_val(unsigned argc)
 {
-    vm_assign(0, env_new(FRAME_ARG_0, FRAME_ARG_1));
+    vm_assign(0, env_new(MC_FRAME_ARG_0, MC_FRAME_ARG_1));
 }
 
 obj_t 
@@ -2633,6 +2645,8 @@ env_at(obj_t s)
     obj_t p;
 
     if (p = env_find(s))  return (CDR(p));
+
+    error(ERR_SYM_NOT_BOUND, s);
 
     ASSERT(0);                  /* Symbol not bound */
 }
@@ -2658,15 +2672,15 @@ env_del(obj_t s)
 void
 cm_env_at(unsigned argc)
 {
-    vm_assign(0, env_at(FRAME_ARG_0));
+    vm_assign(0, env_at(MC_FRAME_ARG_0));
 }
 
 void
 cm_env_at_put(unsigned argc)
 {
-    obj_t val = FRAME_ARG_1;
+    obj_t val = MC_FRAME_ARG_1;
 
-    env_at_put(FRAME_ARG_0, val);
+    env_at_put(MC_FRAME_ARG_0, val);
 
     vm_assign(0, val);
 }
@@ -2674,7 +2688,7 @@ cm_env_at_put(unsigned argc)
 void
 cm_env_del(unsigned argc)
 {
-    env_del(FRAME_ARG_0);
+    env_del(MC_FRAME_ARG_0);
 
     vm_assign(0, NIL);
 }
@@ -2686,7 +2700,7 @@ cm_env_del(unsigned argc)
 void
 cm_system_shell(unsigned argc)
 {
-    string_tocstr(0, FRAME_ARG_0);
+    string_tocstr(0, MC_FRAME_ARG_0);
 
     integer_new(0, (long long) system(STRING(R0)->data));
 }
@@ -2698,7 +2712,7 @@ extern int yydebug, yy_flex_debug;
 void
 cm_system_debug(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
     unsigned val = INTEGER(arg)->val;
 
     debug.vm = val;   val >>= 1;
@@ -2712,7 +2726,7 @@ cm_system_debug(unsigned argc)
 void
 cm_system_assert(unsigned argc)
 {
-    obj_t arg = FRAME_ARG_0;
+    obj_t arg = MC_FRAME_ARG_0;
 
     assert(inst_of(arg) == consts.cl.boolean && BOOLEAN(arg)->val != 0);
 
@@ -2738,7 +2752,7 @@ cm_system_exit(unsigned argc)
 void
 cm_system_exitc(unsigned argc)
 {
-    exit(INTEGER(FRAME_ARG_0)->val);
+    exit(INTEGER(MC_FRAME_ARG_0)->val);
 }
 
 /***************************************************************************/
@@ -2768,8 +2782,8 @@ cm_file_new(unsigned argc)
 
     vm_pushm(1, 2);
 
-    string_tocstr(1, FRAME_ARG_0);
-    string_tocstr(2, FRAME_ARG_1);
+    string_tocstr(1, MC_FRAME_ARG_0);
+    string_tocstr(2, MC_FRAME_ARG_1);
 
     _fp = fopen(STRING(R1)->data, STRING(R2)->data);
 
@@ -2782,7 +2796,7 @@ cm_file_new(unsigned argc)
 void
 cm_file_load(unsigned argc)
 {
-    yy_push_file(_FILE(FRAME_RECVR)->fp);
+    yy_push_file(_FILE(MC_FRAME_RECVR)->fp);
 
     read_eval();
 
@@ -2817,13 +2831,13 @@ file_read(FILE *_fp, unsigned len, unsigned linef)
 void
 cm_file_read(unsigned argc)
 {
-    file_read(_FILE(FRAME_RECVR)->fp, INTEGER(FRAME_ARG_0)->val, 0);
+    file_read(_FILE(MC_FRAME_RECVR)->fp, INTEGER(MC_FRAME_ARG_0)->val, 0);
 }
 
 void
 cm_file_readln(unsigned argc)
 {
-    file_read(_FILE(FRAME_RECVR)->fp, INTEGER(FRAME_ARG_0)->val, 1);
+    file_read(_FILE(MC_FRAME_RECVR)->fp, INTEGER(MC_FRAME_ARG_0)->val, 1);
 }
 
 /***************************************************************************/
@@ -2854,7 +2868,7 @@ cm_module_new(unsigned argc)
     vm_push(1);
 
     vm_inst_alloc(0, consts.cl.module);
-    string_tocstr(1, FRAME_ARG_0);
+    string_tocstr(1, MC_FRAME_ARG_0);
     ptr = dlopen(STRING(R1)->data, RTLD_NOW);
     ASSERT(ptr != 0);
     inst_init(R0, ptr);
@@ -2875,7 +2889,6 @@ vm_init(void)
     stack_end = stack + STACK_SIZE;
 
     sp = stack_end;
-    fp = 0;
 }
 
 const struct init_cl init_cl_tbl[] = {
@@ -3000,10 +3013,6 @@ const struct init_cl init_cl_tbl[] = {
       inst_free_module
     },
     /* Not really instantiable... */
-    { &consts.cl.prog,
-      &consts.cl.object,
-      &consts.str.Prog
-    },
     { &consts.cl.env,
       &consts.cl.object,
       &consts.str.Environment
@@ -3031,7 +3040,6 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.Module,      "#Module" },
     { &consts.str.Object,      "#Object" },    
     { &consts.str.Pair,        "#Pair" },
-    { &consts.str.Prog,        "#Prog" },
     { &consts.str.String,      "#String" },
     { &consts.str.System,      "#System" },
     { &consts.str.addc,        "add:" },
@@ -3041,7 +3049,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.atc,         "at:" },
     { &consts.str.atc_lengthc, "at:length:" },
     { &consts.str.atc_putc,    "at:put:" },
-    { &consts.str.breakc,      "break:" },
+    { &consts.str._break,      "break" },
     { &consts.str.car,         "car" },
     { &consts.str.cdr,         "cdr" },
     { &consts.str.chr,         "chr" },
@@ -3094,7 +3102,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.readc,       "read:" },
     { &consts.str.readlnc,     "readln:" },
     { &consts.str.reducec_initc, "reduce:init:" },
-    { &consts.str.returnc,     "return:" },
+    { &consts.str._return,     "return" },
     { &consts.str.rindexc,     "rindex:" },
     { &consts.str.shellc,      "shell:" },
     { &consts.str.splicec,     "splice:" },
@@ -3103,7 +3111,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.tostring,    "tostring" },
     { &consts.str.tostringc,   "tostring:" },
     { &consts.str._true,       "#true" },
-    { &consts.str.whilec_doc,  "while:do:" }
+    { &consts.str.whilec,      "while:" }
 #ifdef DEBUG
     ,
     { &consts.str.assertc,     "assert:" },
@@ -3134,11 +3142,7 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.env,         &consts.str.newc_valuec, cm_env_new_val },
     { &consts.cl.env,         &consts.str.atc,      cm_env_at },
     { &consts.cl.env,         &consts.str.atc_putc, cm_env_at_put },
-    { &consts.cl.env,         &consts.str.deletec,  cm_env_del },
-    { &consts.cl.prog,        &consts.str.whilec_doc, cm_prog_while },
-    { &consts.cl.prog,        &consts.str._continue, cm_prog_continue },
-    { &consts.cl.prog,        &consts.str.breakc,    cm_prog_break },
-    { &consts.cl.prog,        &consts.str.returnc,   cm_prog_return }
+    { &consts.cl.env,         &consts.str.deletec,  cm_env_del }
 #ifdef DEBUG
     ,
     { &consts.cl.system,      &consts.str.assertc,  cm_system_assert },
