@@ -9,15 +9,20 @@
 
 struct yy_stack_entry {
     struct yy_stack_entry *prev;
-    YY_BUFFER_STATE       yybs;
+    FILE                  *fp;
+    void                  *cookie;
+    unsigned              line;
+    YY_BUFFER_STATE       yybs;		/* Previous; current in YY_CURRENT_BUFFER */
 } *yysp;
+
+void *cmalloc(unsigned), _cfree(void *, unsigned);
 
 void
 yy_push(void)
 {
     struct yy_stack_entry *p;
 
-    p = malloc(sizeof(*p));
+    p = cmalloc(sizeof(*p));
     p->prev = yysp;
     yysp = p;
 
@@ -34,14 +39,23 @@ yy_pop(void)
     p = yysp;
     yysp = yysp->prev;
 
-    free(p);
+    _cfree(p, sizeof(*p));
 }
 
 void
-yy_push_file(FILE *_fp)
+yy_popall(void)
+{
+    while (yysp)  yy_pop();
+}
+
+void
+yy_push_file(FILE *fp, void *cookie)
 {
     yy_push();
-    yy_switch_to_buffer(yy_create_buffer(_fp, YY_BUF_SIZE));
+    yy_switch_to_buffer(yy_create_buffer(fp, YY_BUF_SIZE));
+    yysp->fp     = fp;
+    yysp->cookie = cookie;
+    yysp->line   = 1;
 }
 
 void
@@ -49,6 +63,21 @@ yy_push_str(char *s, unsigned n)
 {
     yy_push();
     yy_scan_bytes(s, n);
+    yysp->fp     = 0;
+    yysp->cookie = 0;
+    yysp->line   = 0;
+}
+
+void *
+yycookie(void)
+{
+    return (yysp ? yysp->cookie : 0);
+}
+
+int
+yyline(void)
+{
+    return (yysp ? yysp->line : -1);
 }
 
 %}
@@ -107,7 +136,11 @@ NDQUOTE         [^\"]
     do {
         c = input();
     } while (!(c == '\n' || c == EOF));
+
+    ++yysp->line;
 }
+
+"\n"	{ if (yysp)  ++yysp->line; }
 
 [ \t\n\r]       /* Skip whitespace */
 

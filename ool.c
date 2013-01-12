@@ -26,8 +26,10 @@ struct {
 } debug;
 #endif
 
-void yy_push_file(FILE *_fp), yy_push_str(char *, unsigned), yy_pop(void);
-int yyparse();
+void yy_push_file(FILE *fp, void *cookie), yy_push_str(char *, unsigned), yy_pop(void), yy_popall(void);
+char *yycookie(void);
+int  yyline(void);
+int  yyparse();
 
 /***************************************************************************/
 
@@ -66,6 +68,14 @@ fatal(enum fatal_errcode errcode)
 #define LIST_FIRST(list)  ((list)->next)
 #define LIST_LAST(list)   ((list)->prev)
 #define LIST_END(list)    (list)
+
+unsigned
+list_empty(struct list *list)
+{
+    ASSERT((LIST_FIRST(list) == list) == (LIST_LAST(list) == list));
+
+    return (LIST_FIRST(list) == list);
+}
 
 void
 list_init(struct list *list)
@@ -116,13 +126,13 @@ inst_init_passthru(obj_t cl, obj_t inst, va_list ap)
     cl_inst_init(CLASS(cl)->parent, inst, ap);
 }
 
-void metaclass_walk(obj_t inst, void (*func)(obj_t));
+void meta_metaclass_walk(obj_t inst, void (*func)(obj_t));
 
 void
 cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     if (cl == NIL) {
-        metaclass_walk(inst, func);
+        meta_metaclass_walk(inst, func);
         return;
     }
 
@@ -217,6 +227,41 @@ vm_stats_print(void)
     PRINT_INT(stats.vm.stack_depth_max);    
 }
 
+obj_t mem_debug_addr;
+
+void
+mem_debug(obj_t obj)
+{
+    unsigned f = 0;
+
+    if (obj != mem_debug_addr)  return;
+
+    f = f;
+}
+
+#define MEM_DEBUG(obj)  mem_debug(obj)
+
+void method_call_0(obj_t, obj_t);
+
+void
+stack_dump(void)
+{
+    obj_t *p, *sp_save = sp;
+
+    printf("Stack dump:\n");
+    for (p = sp; p < stack_end; ++p) {
+	printf("%p: ", *p);
+	method_call_0(*p, consts.str.print);
+	printf("\n");
+    }
+
+    ASSERT(sp == sp_save);
+}
+
+#else
+
+#define MEM_DEBUG(obj)
+
 #endif
 
 void *
@@ -291,9 +336,16 @@ obj_free(obj_t obj)
 void
 obj_release(obj_t obj)
 {
-    if (obj == NIL)  return;
+    MEM_DEBUG(obj);
 
-    ASSERT(obj->ref_cnt != 0);
+    /* Reference loops do exist, so release of an obj with ref_cnt == 0 can
+       happen, as freeing progresses.
+       Known reference loops include:
+         inst_of(parent(#Metaclass) == #Metaclass
+         inst_of(name(#String)) == #String
+    */
+
+    if (obj == NIL || obj->ref_cnt == 0)  return;
 
     if (--obj->ref_cnt == 0)  obj_free(obj);
 }
@@ -301,6 +353,8 @@ obj_release(obj_t obj)
 obj_t
 obj_retain(obj_t obj)
 {
+    MEM_DEBUG(obj);
+
     if (obj) {
         ++obj->ref_cnt;
 
@@ -356,17 +410,28 @@ obj_mark(obj_t obj)
 }
 
 void
-collect(void)
+root_walk(void (*func)(obj_t))
 {
-#ifdef DEBUG
-    if (debug.mem) {
-        printf("collect(): Starting...\n");
-        mem_stats_print();
+    unsigned        i, n;
+    obj_t           *p;
+    struct root_hdr *r;
+    
+    for (i = 0; i < ARRAY_SIZE(regs); ++i)  (*func)(regs[i]);
+    
+    for (p = sp; p < stack_end; ++p)  (*func)(*p);
+    
+    (*func)(env);
+
+    for (r = root; r; r = r->next) {
+	for (p = (obj_t *)(r + 1), n = r->size; n; --n, ++p) {
+	    (*func)(*p);
+	}
     }
-#endif
+}
 
-    collectingf = 1;
-
+void
+root_mark(void)
+{
     /* Zero out all ref cnts */
     {
         struct list *p;
@@ -374,9 +439,6 @@ collect(void)
         for (p = LIST_FIRST(OBJ_LIST_ACTIVE); p != LIST_END(OBJ_LIST_ACTIVE); p = p->next) {
             obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
             
-#ifdef DEBUG
-            q->old_ref_cnt = q->ref_cnt;
-#endif
             q->ref_cnt = 0;
         }
     }
@@ -384,23 +446,8 @@ collect(void)
     /* Mark everything referenced by root set.
        Root set = regs + stack + env + consts
     */
-    {
-        unsigned        i, n;
-        obj_t           *p;
-	struct root_hdr *r;
 
-        for (i = 0; i < ARRAY_SIZE(regs); ++i)  obj_mark(regs[i]);
-
-        for (p = sp; p < stack_end; ++p)  obj_mark(*p);
-
-        obj_mark(env);
-
-	for (r = root; r; r = r->next) {
-	    for (p = (obj_t *)(r + 1), n = r->size; n; --n, ++p) {
-		obj_mark(*p);
-	    }
-	}
-    }
+    root_walk(obj_mark);
 
 #ifdef DEBUG
     /* Consistency checking */
@@ -416,10 +463,26 @@ collect(void)
             obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
 
             ASSERT(q->ref_cnt != 0);
-            ASSERT(q->ref_cnt == q->old_ref_cnt);
+
+	    /* Can reference loops cause ref_cnt different after marking? */
         }
     }
 #endif
+}
+
+void
+collect(void)
+{
+#ifdef DEBUG
+    if (debug.mem) {
+        printf("collect(): Starting...\n");
+        mem_stats_print();
+    }
+#endif
+
+    collectingf = 1;
+
+    root_mark();
 
     /* Free everything left on active list */
     {
@@ -565,11 +628,6 @@ void error(enum errcode errcode, ...);
 
 /***************************************************************************/
 
-struct mc_frame {
-    struct mc_frame *prev;
-    obj_t           sel, args;
-} *mcfp;
-
 #define MC_FRAME_BEGIN(s, a)			\
     {                                           \
 	struct mc_frame __mcf[1];		\
@@ -582,13 +640,6 @@ struct mc_frame {
 #define MC_FRAME_END				\
         mcfp = mcfp->prev;			\
     }
-
-#define MC_FRAME_SEL       (mcfp->sel)
-#define MC_FRAME_ARGS      (mcfp->args)
-#define MC_FRAME_RECVR     (CAR(MC_FRAME_ARGS))
-#define MC_FRAME_ARG_0     (CAR(CDR(MC_FRAME_ARGS)))
-#define MC_FRAME_ARG_1     (CAR(CDR(CDR(MC_FRAME_ARGS))))
-#define MC_FRAME_ARG_2     (CAR(CDR(CDR(CDR(MC_FRAME_ARGS)))))
 
 void method_call_0(obj_t recvr, obj_t sel);
 void method_call_1(obj_t recvr, obj_t sel, obj_t arg1);
@@ -606,6 +657,7 @@ bt_print(void)
     printf("Backtrace:\n");
     for (p = mcfp; p; p = p->prev) {
 	method_call_0(p->sel, consts.str.print);
+	printf(" ");
 	method_call_0(p->args, consts.str.print);
 	printf("\n");
     }
@@ -730,11 +782,20 @@ method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
 
 /***************************************************************************/
 
+jmp_buf jmp_buf_top;
+
 void
 error(enum errcode errcode, ...)
 {
     va_list ap;
     obj_t   obj;
+    void    *cookie;
+
+    if (cookie = yycookie()) {
+	printf("File ");
+	method_call_0(_FILE(cookie)->filename, consts.str.print);
+	printf(", line %d\n", yyline());
+    }
 
     va_start(ap, errcode);
 
@@ -763,7 +824,76 @@ error(enum errcode errcode, ...)
 
     va_end(ap);
 
-    ASSERT(0);
+    longjmp(jmp_buf_top, 1);
+}
+
+/***************************************************************************/
+
+/* Metaclass itself */
+
+/* Used when walking an object whose inst_of is NIL;
+   see cl_inst_walk()
+*/
+void
+meta_metaclass_walk(obj_t inst, void (*func)(obj_t))
+{
+    (*func)(CLASS(inst)->name);
+    (*func)(CLASS(inst)->parent);
+    (*func)(CLASS(inst)->cl_methods);
+    (*func)(CLASS(inst)->cl_vars);
+    (*func)(CLASS(inst)->inst_methods);
+    (*func)(CLASS(inst)->inst_vars);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_name(unsigned argc)
+{
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_parent(unsigned argc)
+{
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->parent);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_cl_methods(unsigned argc)
+{
+    vm_assign(0, NIL);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_cl_vars(unsigned argc)
+{
+    vm_assign(0, NIL);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_inst_methods(unsigned argc)
+{
+    vm_assign(0, NIL);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_inst_vars(unsigned argc)
+{
+    /* Must be hard-coded, because
+       inst_vars(#Metaclass) only has mutable ones
+    */
+
+    cons(0, consts.cl.list, consts.str.instance_variables, NIL);
+    cons(0, consts.cl.list, consts.str.instance_methods, R0);
+    cons(0, consts.cl.list, consts.str.class_variables, R0);
+    cons(0, consts.cl.list, consts.str.class_methods, R0);
+    cons(0, consts.cl.list, consts.str.parent, R0);
+    cons(0, consts.cl.list, consts.str.name, R0);
 }
 
 /***************************************************************************/
@@ -796,6 +926,12 @@ cm_object_new(unsigned argc)
 
 void
 cm_object_quote(unsigned argc)
+{
+    vm_assign(0, MC_FRAME_RECVR);
+}
+
+void
+cm_object_pquote(unsigned argc)
 {
     vm_assign(0, MC_FRAME_RECVR);
 }
@@ -861,7 +997,7 @@ cm_object_append(unsigned argc)
 /* Class: Metaclass */
 
 void
-_inst_walk_metaclass(obj_t inst, void (*func)(obj_t))
+inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     (*func)(CLASS(inst)->name);
     (*func)(CLASS(inst)->parent);
@@ -869,18 +1005,6 @@ _inst_walk_metaclass(obj_t inst, void (*func)(obj_t))
     (*func)(CLASS(inst)->cl_vars);
     (*func)(CLASS(inst)->inst_methods);
     (*func)(CLASS(inst)->inst_vars);
-}
-
-void
-metaclass_walk(obj_t inst, void (*func)(obj_t))
-{
-    _inst_walk_metaclass(inst, func);
-}
-
-void
-inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
-{
-    _inst_walk_metaclass(inst, func);
 
     cl_inst_walk(CLASS(cl)->parent, inst, func);
 }
@@ -898,17 +1022,6 @@ cm_metaclass_parent(unsigned argc)
 }
 
 void dict_keys(obj_t dict);
-
-void
-cm_meta_metaclass_inst_vars(unsigned argc)
-{
-    cons(0, consts.cl.list, consts.str.instance_variables, NIL);
-    cons(0, consts.cl.list, consts.str.instance_methods, R0);
-    cons(0, consts.cl.list, consts.str.class_variables, R0);
-    cons(0, consts.cl.list, consts.str.class_methods, R0);
-    cons(0, consts.cl.list, consts.str.parent, R0);
-    cons(0, consts.cl.list, consts.str.name, R0);
-}
 
 void
 cm_metaclass_inst_vars(unsigned argc)
@@ -1504,6 +1617,26 @@ cm_string_tostring(unsigned argc)
 }
 
 void
+cm_string_pquote(unsigned argc)
+{
+    obj_t    recvr = MC_FRAME_RECVR;
+    char     *p;
+    unsigned n;
+
+    for (p = STRING(recvr)->data, n = STRING(recvr)->size; n; --n, ++p) {
+	if (isspace(*p)) {
+	    string_new(0, 3, 1, "\"",
+		             STRING(recvr)->size, STRING(recvr)->data, 
+		             1, "\""
+		       );
+	    return;
+	}
+    }
+
+    vm_assign(0, recvr);
+}
+
+void
 cm_string_append(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
@@ -1700,7 +1833,7 @@ inst_init_dptr(obj_t cl, obj_t inst, va_list ap)
 void
 cons(unsigned dst, obj_t cl, obj_t car, obj_t cdr)
 {
-    vm_pushl(regs[dst]);
+    vm_push(dst);
 
     vm_inst_alloc(dst, cl);
     inst_init(regs[dst], car, cdr);
@@ -2762,10 +2895,22 @@ cm_system_exitc(unsigned argc)
 void
 inst_init_file(obj_t cl, obj_t inst, va_list ap)
 {
-    FILE *_fp = va_arg(ap, FILE *);
+    obj_t filename = va_arg(ap, obj_t);
+    obj_t mode     = va_arg(ap, obj_t);
+    FILE *fp       = va_arg(ap, FILE *);
 
-    _FILE(inst)->fp = _fp;
+    _FILE(inst)->filename = filename;
+    _FILE(inst)->mode     = mode;
+    _FILE(inst)->fp       = fp;
     cl_inst_init(CLASS(cl)->parent, inst, ap);
+}
+
+void
+inst_walk_file(obj_t cl, obj_t inst, void (*func)(obj_t))
+{
+    (*func)(_FILE(inst)->filename);
+    (*func)(_FILE(inst)->mode);
+    cl_inst_walk(CLASS(cl)->parent, inst, func);
 }
 
 void
@@ -2778,25 +2923,28 @@ inst_free_file(obj_t cl, obj_t inst)
 void
 cm_file_new(unsigned argc)
 {
-    FILE *_fp;
+    obj_t filename = MC_FRAME_ARG_0, mode = MC_FRAME_ARG_1;
+    FILE *fp;
 
     vm_pushm(1, 2);
 
-    string_tocstr(1, MC_FRAME_ARG_0);
-    string_tocstr(2, MC_FRAME_ARG_1);
+    string_tocstr(1, filename);
+    string_tocstr(2, mode);
 
-    _fp = fopen(STRING(R1)->data, STRING(R2)->data);
+    fp = fopen(STRING(R1)->data, STRING(R2)->data);
 
     vm_popm(1, 2);
 
     vm_inst_alloc(0, consts.cl.file);
-    inst_init(R0, _fp);
+    inst_init(R0, filename, mode, fp);
 }
 
 void
 cm_file_load(unsigned argc)
 {
-    yy_push_file(_FILE(MC_FRAME_RECVR)->fp);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    yy_push_file(_FILE(recvr)->fp, recvr);
 
     read_eval();
 
@@ -2804,7 +2952,7 @@ cm_file_load(unsigned argc)
 }
 
 void
-file_read(FILE *_fp, unsigned len, unsigned linef)
+file_read(FILE *fp, unsigned len, unsigned linef)
 {
     char     *p;
     unsigned i;
@@ -2816,7 +2964,7 @@ file_read(FILE *_fp, unsigned len, unsigned linef)
     memset(STRING(R1)->data, 0, len);
 
     for (i = 0, p = STRING(R1)->data; len; --len, ++p, ++i) {
-	int c = fgetc(_fp);
+	int c = fgetc(fp);
 
 	if (c == EOF || linef && c == '\n')  break;
 
@@ -3001,7 +3149,7 @@ const struct init_cl init_cl_tbl[] = {
       &consts.str.File,
       sizeof(struct inst_file),
       inst_init_file,
-      inst_walk_passthru,
+      inst_walk_file,
       inst_free_file
     },
     { &consts.cl.module,
@@ -3093,6 +3241,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.nil,         "#nil" },
     { &consts.str.parent,      "parent" },
     { &consts.str.pop,         "pop" },
+    { &consts.str.pquote,      "pquote" },
     { &consts.str.print,       "print" },
     { &consts.str.push,        "push" },
     { &consts.str.quote,       "quote" },
@@ -3121,8 +3270,13 @@ const struct init_str init_str_tbl[] = {
 };
 
 const struct init_method init_cl_method_tbl[] = {
-    { &consts.cl.metaclass,   &consts.str.newc_parentc_instance_variablesc, cm_metaclass_new },
+    { &consts.cl.metaclass,   &consts.str.name,               cm_meta_metaclass_name },
+    { &consts.cl.metaclass,   &consts.str.parent,             cm_meta_metaclass_parent },
+    { &consts.cl.metaclass,   &consts.str.class_methods,      cm_meta_metaclass_cl_methods },
+    { &consts.cl.metaclass,   &consts.str.class_variables,    cm_meta_metaclass_cl_vars },
+    { &consts.cl.metaclass,   &consts.str.instance_methods,   cm_meta_metaclass_inst_methods },
     { &consts.cl.metaclass,   &consts.str.instance_variables, cm_meta_metaclass_inst_vars },
+    { &consts.cl.metaclass,   &consts.str.newc_parentc_instance_variablesc, cm_metaclass_new },
     { &consts.cl.object,      &consts.str.new,      cm_object_new },
     { &consts.cl.integer,     &consts.str.new,      cm_integer_new },
     { &consts.cl.integer,     &consts.str.newc,     cm_integer_new },
@@ -3153,6 +3307,7 @@ const struct init_method init_cl_method_tbl[] = {
 
 const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.object,      &consts.str.quote,      cm_object_quote },
+    { &consts.cl.object,      &consts.str.pquote,     cm_object_pquote },
     { &consts.cl.object,      &consts.str.instanceof, cm_object_instof },
     { &consts.cl.object,      &consts.str.eval,       cm_object_eval },
     { &consts.cl.object,      &consts.str.equalsc,    cm_object_eq },
@@ -3208,6 +3363,7 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.string,      &consts.str.rindexc,    cm_string_rindex },
     { &consts.cl.string,      &consts.str.splitc,     cm_string_split },
     { &consts.cl.string,      &consts.str.load,       cm_string_load },
+    { &consts.cl.string,      &consts.str.pquote,     cm_string_pquote },
     { &consts.cl.dptr,        &consts.str.car,        cm_dptr_car },
     { &consts.cl.dptr,        &consts.str.cdr,        cm_dptr_cdr },
     { &consts.cl.dptr,        &consts.str.hash,       cm_dptr_hash },
@@ -3430,6 +3586,25 @@ yyerror(void)
     return (0);
 }
 
+#ifdef DEBUG
+
+void
+mem_check(void)
+{
+    struct list *p;
+    
+    for (p = LIST_FIRST(OBJ_LIST_ACTIVE); p != LIST_END(OBJ_LIST_ACTIVE); p = p->next) {
+	obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
+	
+	ASSERT(q->ref_cnt != 0);
+    }
+
+    root_mark();
+
+    ASSERT(list_empty(OBJ_LIST_ACTIVE)); /* Everytning marked, nothing active */
+}
+
+#endif
 
 void
 fini(void)
@@ -3439,9 +3614,10 @@ fini(void)
         if (sp != stack_end)  printf("!!! Stack not empty!\n");
     }
 
-    if (debug.mem)  mem_stats_print();
-    if (debug.vm)   vm_stats_print();
+    mem_check();
 
+    mem_stats_print();
+    vm_stats_print();
 #endif
 }
 
@@ -3457,6 +3633,12 @@ main(void)
 #endif
     
     init();
+
+    setjmp(jmp_buf_top);
+
+    yy_popall();
+    while (sp < stack_end)  vm_drop();
+    mcfp = 0;
 
     for (;;) {
         printf("\nok ");

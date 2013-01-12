@@ -63,7 +63,7 @@ cm_socket_new(unsigned argc)
 void
 cm_socket_bind(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0, ipaddr = CAR(arg), port = CDR(arg);
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, ipaddr = CAR(arg), port = CDR(arg);
     struct sockaddr_in sockaddr;
     int rc;
 
@@ -87,7 +87,7 @@ cm_socket_bind(unsigned argc)
 void
 cm_socket_connect(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0, ipaddr = CAR(arg), port = CDR(arg);
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, ipaddr = CAR(arg), port = CDR(arg);
     struct sockaddr_in sockaddr;
     int rc;
 
@@ -111,7 +111,7 @@ cm_socket_connect(unsigned argc)
 void
 cm_socket_send(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
     int rc;
 
     rc = send(SOCKET(recvr)->fd, STRING(arg)->data, STRING(arg)->size, 0);
@@ -124,7 +124,7 @@ cm_socket_send(unsigned argc)
 void
 cm_socket_recv(unsigned argc)
 {
-    obj_t recvr = FRAME_RECVR, arg = FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
     int   n, rc;
 
     VM_PUSHM(R1, 2);

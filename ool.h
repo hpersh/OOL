@@ -12,9 +12,6 @@ struct obj {
     struct list list_node;
     obj_t       inst_of;
     unsigned    ref_cnt;
-#ifdef DEBUG
-    unsigned    old_ref_cnt;
-#endif
 };
 
 struct inst_metaclass {
@@ -99,6 +96,8 @@ struct inst_dict {
 
 struct inst_file {
     struct obj base;
+    obj_t      filename;
+    obj_t      mode;
     FILE       *fp;
 };
 #define _FILE(obj)  ((struct inst_file *)(obj))
@@ -143,6 +142,18 @@ void cl_inst_init(obj_t cl, obj_t inst, va_list ap);
 void cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t));
 void cl_inst_free(obj_t cl, obj_t inst);
 void inst_init(obj_t recvr, ...);
+
+struct mc_frame {
+    struct mc_frame *prev;
+    obj_t           sel, args;
+} *mcfp;
+
+#define MC_FRAME_SEL       (mcfp->sel)
+#define MC_FRAME_ARGS      (mcfp->args)
+#define MC_FRAME_RECVR     (CAR(MC_FRAME_ARGS))
+#define MC_FRAME_ARG_0     (CAR(CDR(MC_FRAME_ARGS)))
+#define MC_FRAME_ARG_1     (CAR(CDR(CDR(MC_FRAME_ARGS))))
+#define MC_FRAME_ARG_2     (CAR(CDR(CDR(CDR(MC_FRAME_ARGS)))))
 
 void code_method_new(unsigned dst, void (*func)(unsigned));
 void boolean_new(unsigned dst, unsigned val);
@@ -259,6 +270,7 @@ struct consts {
         obj_t nil;
         obj_t parent;
         obj_t pop;
+	obj_t pquote;
         obj_t print;
         obj_t push;
         obj_t quote;

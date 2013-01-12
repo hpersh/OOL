@@ -1,3 +1,7 @@
+// Test mem mgmt
+[#System collect]
+
+
 // Test comments
 
 [#System debug: 3]  // Turn on debugging
@@ -116,5 +120,3 @@
 // #Socket  // Test loading
 // [s = [#Socket new]]  // Test loading
 
-// Test mem mgmt
-[#System collect]

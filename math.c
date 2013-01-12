@@ -23,19 +23,19 @@ struct {
 void
 cm_float_sin(unsigned argc)
 {
-    float_new(0, sinl(FLOAT(FRAME_RECVR)->val));
+    float_new(0, sinl(FLOAT(MC_FRAME_RECVR)->val));
 }
 
 void
 cm_float_cos(unsigned argc)
 {
-    float_new(0, cosl(FLOAT(FRAME_RECVR)->val));
+    float_new(0, cosl(FLOAT(MC_FRAME_RECVR)->val));
 }
 
 void
 cm_float_exp(unsigned argc)
 {
-    float_new(0, expl(FLOAT(FRAME_RECVR)->val));
+    float_new(0, expl(FLOAT(MC_FRAME_RECVR)->val));
 }
 
 const struct init_str math_init_str_tbl[] = {
