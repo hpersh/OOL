@@ -268,10 +268,13 @@ struct consts {
 	obj_t newc_parentc_instance_variablesc;
         obj_t newc_valuec;
         obj_t nil;
+        obj_t not;
+	obj_t orc;
         obj_t parent;
         obj_t pop;
 	obj_t pquote;
         obj_t print;
+        obj_t printc;
         obj_t push;
         obj_t quote;
         obj_t range;
@@ -285,12 +288,16 @@ struct consts {
         obj_t shellc;
 	obj_t splicec;
 	obj_t splitc;
+	obj_t _stderr;
+	obj_t _stdin;
+	obj_t _stdout;
 	obj_t subc;
         obj_t subclassc_instance_variablesc;
         obj_t tostring;
         obj_t tostringc;
         obj_t _true;
 	obj_t whilec;
+	obj_t xorc;
         
 #ifdef DEBUG
         obj_t assertc;

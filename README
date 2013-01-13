@@ -1,6 +1,13 @@
 * TODO
 
-- separate dptr, pair and list
+- "programming" methods
+  - while:    inst method of Object; eval receiver, if true, eval body & repeat
+  - break     inst method of Object; break out of while, while returns recvr
+  - continue  class method of Object; next iter of while
+  - return    inst method of Object; break out of block, block returns recvr
+- with indirect calling of methods, cannot assume type of receiver
+- resolve reference count differences before and after marking
+  - alloc/retain/release/free sequence vs. marking, which always starts at root set
 - use GNU autobuild
 - load init tbls, then unload
 - avoiding duplicate strings?
@@ -9,27 +16,22 @@
 - cleaner root-set interface for modules
 - module name hierarchy
 - complete methods
+- complete error checking in methods
 - get rid of class constants, replace with env lookups
 - alloc/init split
 - unevalled args?
-- inst_of(Metaclass) == NIL... ?
 - constants
   - names starting with #
   - names in env, inst vars
 - Set class
-- Program class
-  - while:do:
 - macros
   - eval method, then eval result
   - {{ }} syntax?
   - class Macro, derived from Block?
   - macros need unaevalled args?
-- error checking
-  - # of args, arg type
 - error handling
   - distinguish parse error from EOF
     - use flex EOF rule 
-  - recovery
 - cleanup
   - forward declarations
   - refactoring, e.g. common code

@@ -36,7 +36,9 @@ int  yyparse();
 enum fatal_errcode {
     FATAL_ERR_NO_MEM,
     FATAL_ERR_STACK_OVERFLOW,
-    FATAL_ERR_STACK_UNDERFLOW
+    FATAL_ERR_STACK_UNDERFLOW,
+    FATAL_ERR_DOUBLE_ERR,
+    FATAL_ERR_BAD_ERR_STREAM
 };
 
 void
@@ -53,6 +55,12 @@ fatal(enum fatal_errcode errcode)
 	break;
     case FATAL_ERR_STACK_UNDERFLOW:
 	msg = "Stack underflow";
+	break;
+    case FATAL_ERR_DOUBLE_ERR:
+	msg = "Double error";
+	break;
+    case FATAL_ERR_BAD_ERR_STREAM:
+	msg = "Bad strem for error output";
 	break;
     default:
 	ASSERT(0);
@@ -121,7 +129,7 @@ cl_inst_init(obj_t cl, obj_t inst, va_list ap)
 }
 
 void
-inst_init_passthru(obj_t cl, obj_t inst, va_list ap)
+inst_init_parent(obj_t cl, obj_t inst, va_list ap)
 {
     cl_inst_init(CLASS(cl)->parent, inst, ap);
 }
@@ -131,7 +139,7 @@ void meta_metaclass_walk(obj_t inst, void (*func)(obj_t));
 void
 cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
-    if (cl == NIL) {
+    if (inst == consts.cl.metaclass) {
         meta_metaclass_walk(inst, func);
         return;
     }
@@ -140,7 +148,7 @@ cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t))
 }
 
 void
-inst_walk_passthru(obj_t cl, obj_t inst, void (*func)(obj_t))
+inst_walk_parent(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     cl_inst_walk(CLASS(cl)->parent, inst, func);
 }
@@ -152,7 +160,7 @@ cl_inst_free(obj_t cl, obj_t inst)
 }
 
 void
-inst_free_passthru(obj_t cl, obj_t inst)
+inst_free_parent(obj_t cl, obj_t inst)
 {
     cl_inst_free(CLASS(cl)->parent, inst);
 }
@@ -464,7 +472,11 @@ root_mark(void)
 
             ASSERT(q->ref_cnt != 0);
 
-	    /* Can reference loops cause ref_cnt different after marking? */
+	    /* Can reference loops cause ref_cnt different after marking?
+	       Marking always starts wit root set, but reference counting
+	       during normal alloc/retain/release/free operations may
+	       be something different?
+	    */
         }
     }
 #endif
@@ -621,7 +633,10 @@ vm_dropn(unsigned n)
 enum errcode {
     ERR_SYM_NOT_BOUND,
     ERR_NO_METHOD,
-    ERR_INVALID_METHOD
+    ERR_INVALID_METHOD,
+    ERR_INVALID_ARG,
+    ERR_INVALID_VALUE,
+    ERR_NUM_ARGS
 };
 
 void error(enum errcode errcode, ...);
@@ -650,16 +665,17 @@ obj_t dict_at(obj_t dict, obj_t key);
 void  dict_at_put(obj_t dict, obj_t key, obj_t val);
 
 void
-bt_print(void)
+bt_print(obj_t outf)
 {
+    FILE            *fp = _FILE(outf)->fp;
     struct mc_frame *p;
 
-    printf("Backtrace:\n");
+    fprintf(fp, "Backtrace:\n");
     for (p = mcfp; p; p = p->prev) {
-	method_call_0(p->sel, consts.str.print);
-	printf(" ");
-	method_call_0(p->args, consts.str.print);
-	printf("\n");
+	method_call_1(p->sel, consts.str.printc, outf);
+	fprintf(fp, " ");
+	method_call_1(p->args, consts.str.printc, outf);
+	fprintf(fp, "\n");
     }
 }
 
@@ -697,7 +713,10 @@ method_call(unsigned argc)
     }
 
     cl = inst_of(recvr);
+#if 0
     if (cl == NIL || cl == consts.cl.metaclass) {
+#endif
+    if (recvr == consts.cl.metaclass || cl == consts.cl.metaclass) {
         for (cl = recvr; cl; cl = CLASS(cl)->parent) {
             obj_t obj;
 
@@ -784,50 +803,111 @@ method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
 
 jmp_buf jmp_buf_top;
 
+unsigned err_depth;
+
 void
 error(enum errcode errcode, ...)
 {
+    obj_t   outf;
+    FILE    *fp;
     va_list ap;
     obj_t   obj;
     void    *cookie;
 
+    if (err_depth > 0) {
+	fatal(FATAL_ERR_DOUBLE_ERR);
+    }
+    ++err_depth;
+
+    method_call_0(consts.cl.file, consts.str._stderr);
+    if (inst_of(R0) != consts.cl.file) {
+	fatal(FATAL_ERR_BAD_ERR_STREAM);
+    }
+    fp = _FILE(outf = R0)->fp;
+
     if (cookie = yycookie()) {
-	printf("File ");
-	method_call_0(_FILE(cookie)->filename, consts.str.print);
-	printf(", line %d\n", yyline());
+	fprintf(fp, "File ");
+	method_call_1(_FILE(cookie)->filename, consts.str.printc, outf);
+	fprintf(fp, ", line %d\n", yyline());
     }
 
     va_start(ap, errcode);
-
+    
+    fprintf(fp, "\n");
     switch (errcode) {
     case ERR_SYM_NOT_BOUND:
-	printf("Symbol not bound: ");
+	fprintf(fp, "Symbol not bound: ");
 	obj = va_arg(ap, obj_t);
-	method_call_0(obj, consts.str.print);
+	method_call_1(obj, consts.str.printc, outf);
 	break;
     case ERR_NO_METHOD:
-	printf("No such method: ");
+	fprintf(fp, "No such method: ");
 	obj = va_arg(ap, obj_t);
-	method_call_0(obj, consts.str.print);
+	method_call_1(obj, consts.str.printc, outf);
 	break;
     case ERR_INVALID_METHOD:
-	printf("Invalid method: ");
+	fprintf(fp, "Invalid method: ");
 	obj = va_arg(ap, obj_t);
-	method_call_0(obj, consts.str.print);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_INVALID_ARG:
+	fprintf(fp, "Invalid argument: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_INVALID_VALUE:
+	{
+	    obj_t obj2;
+
+	    obj  = va_arg(ap, obj_t);
+	    obj2 = va_arg(ap, obj_t);
+	    fprintf(fp, "Invalid value for ");
+	    method_call_1(obj, consts.str.printc, outf);
+	    fprintf(fp, ": ");
+	    method_call_1(obj2, consts.str.printc, outf);
+	}
+	break;
+    case ERR_NUM_ARGS:
+	fprintf(fp, "Incorrect number of arguments");
 	break;
     default:
 	ASSERT(0);
     }
 
-    printf("\n");
-    bt_print();
+    fprintf(fp, "\n");
+    bt_print(outf);
 
     va_end(ap);
+
+    --err_depth;
 
     longjmp(jmp_buf_top, 1);
 }
 
-/***************************************************************************/
+/***************************************************************************
+
+Object hiearchies
+
+Instance-of
+
+  Object
+    Metaclass
+      Object
+      Boolean
+      Integer
+      ...
+
+  - Reference loop
+
+Parent
+
+  Object
+    Metaclass
+    Boolean
+    Integer
+    ...
+
+***************************************************************************/
 
 /* Metaclass itself */
 
@@ -849,6 +929,15 @@ meta_metaclass_walk(obj_t inst, void (*func)(obj_t))
 void
 cm_meta_metaclass_name(unsigned argc)
 {
+    if (argc != 0)  error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+}
+
+/* Installed as a class method of Metaclass */
+void
+cm_meta_metaclass_tostring(unsigned argc)
+{
     vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
 }
 
@@ -863,14 +952,14 @@ cm_meta_metaclass_parent(unsigned argc)
 void
 cm_meta_metaclass_cl_methods(unsigned argc)
 {
-    vm_assign(0, NIL);
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->cl_methods);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_cl_vars(unsigned argc)
 {
-    vm_assign(0, NIL);
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->cl_vars);
 }
 
 /* Installed as a class method of Metaclass */
@@ -978,7 +1067,20 @@ cm_object_print(unsigned argc)
     obj_t recvr = MC_FRAME_RECVR;
 
     method_call_0(recvr, consts.str.tostring);
-    method_call_0(R0, consts.str.print);
+    vm_assign(1, R0);
+    method_call_0(R1, consts.str.print);
+
+    vm_assign(0, recvr);
+}
+
+void
+cm_object_printc(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR;
+
+    method_call_0(recvr, consts.str.tostring);
+    vm_assign(1, R0);
+    method_call_1(R1, consts.str.printc, MC_FRAME_ARG_0);
 
     vm_assign(0, recvr);
 }
@@ -986,10 +1088,12 @@ cm_object_print(unsigned argc)
 void
 cm_object_append(unsigned argc)
 {
-    ASSERT(MC_FRAME_RECVR == NIL);
-    ASSERT(inst_of(MC_FRAME_ARG_0) == consts.cl.list);
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
 
-    vm_assign(0, MC_FRAME_ARG_0);
+    if (recvr != NIL)                    error(ERR_INVALID_ARG, recvr);
+    if (inst_of(arg) != consts.cl.list)  error(ERR_INVALID_ARG, arg);
+
+    vm_assign(0, arg);
 }
 
 /***************************************************************************/
@@ -1006,11 +1110,17 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
     (*func)(CLASS(inst)->inst_methods);
     (*func)(CLASS(inst)->inst_vars);
 
-    cl_inst_walk(CLASS(cl)->parent, inst, func);
+    inst_walk_parent(cl, inst, func);
 }
 
 void
 cm_metaclass_name(unsigned argc)
+{
+    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+}
+
+void
+cm_metaclass_tostring(unsigned argc)
 {
     vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
 }
@@ -1042,7 +1152,7 @@ inst_walk_user(obj_t cl, obj_t inst, void (*func)(obj_t))
         (*func)(*p);
     }
 
-    cl_inst_walk(CLASS(cl)->parent, inst, func);
+    inst_walk_parent(cl, inst, func);
 }
 
 void string_dict_new(unsigned dst, unsigned size);
@@ -1076,9 +1186,9 @@ cm_metaclass_new(unsigned argc)
         dict_at_put(CLASS(R0)->inst_vars, CAR(p), R1);
     }
     CLASS(R0)->inst_size = inst_size;
-    CLASS(R0)->inst_init = inst_init_passthru;
+    CLASS(R0)->inst_init = inst_init_parent;
     CLASS(R0)->inst_walk = inst_walk_user;
-    CLASS(R0)->inst_free = inst_free_passthru;
+    CLASS(R0)->inst_free = inst_free_parent;
 
     vm_pop(1);
 }
@@ -1091,7 +1201,8 @@ void
 inst_init_code_method(obj_t cl, obj_t inst, va_list ap)
 {
     CODE_METHOD(inst)->func = va_arg(ap, void (*)(unsigned));
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -1106,12 +1217,19 @@ unsigned list_len(obj_t);
 void
 cm_code_method_eval(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR, args = MC_FRAME_ARG_0;
+    obj_t    recvr = MC_FRAME_RECVR, args;
+    unsigned nargs;
+
+    if (argc != 1)  error(ERR_NUM_ARGS);
+    args = MC_FRAME_ARG_0;
+    if (inst_of(args) != consts.cl.list)  error(ERR_INVALID_ARG, args);
+    nargs = list_len(args);
+    if (nargs < 1)  error(ERR_NUM_ARGS);
 
     vm_pushl(recvr);
     vm_pushl(args);
     MC_FRAME_BEGIN(sp[1], sp[0]) {
-        (*CODE_METHOD(recvr)->func)(list_len(args));
+        (*CODE_METHOD(recvr)->func)(nargs - 1);
     } MC_FRAME_END;
     vm_dropn(2);
 }
@@ -1124,7 +1242,8 @@ void
 inst_init_boolean(obj_t cl, obj_t inst, va_list ap)
 {
     BOOLEAN(inst)->val = va_arg(ap, unsigned);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -1147,6 +1266,12 @@ cm_boolean_or(unsigned argc)
 }
 
 void
+cm_boolean_xor(unsigned argc)
+{
+    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val ^ BOOLEAN(MC_FRAME_ARG_0)->val);
+}
+
+void
 cm_boolean_not(unsigned argc)
 {
     boolean_new(0, !BOOLEAN(MC_FRAME_RECVR)->val);
@@ -1161,10 +1286,12 @@ cm_boolean_tostring(unsigned argc)
 void
 cm_boolean_if(unsigned argc)
 {
-    if (BOOLEAN(MC_FRAME_RECVR)->val) {
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (BOOLEAN(recvr)->val) {
 	method_call_0(MC_FRAME_ARG_0, consts.str.eval);
     } else {
-	vm_assign(0, NIL);
+	vm_assign(0, recvr);
     }
 }
 
@@ -1182,7 +1309,8 @@ void
 inst_init_integer(obj_t cl, obj_t inst, va_list ap)
 {
     INTEGER(inst)->val = va_arg(ap, long long);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -1234,7 +1362,7 @@ cm_integer_new(unsigned argc)
         return;
     }
 
-    ASSERT(0);                  /* Wrong arg type */
+    error(ERR_INVALID_ARG, arg);
 }
 
 void
@@ -1248,12 +1376,14 @@ cm_integer_tostring(unsigned argc)
 void
 cm_integer_tostring_base(unsigned argc)
 {
-    long long val  = INTEGER(MC_FRAME_RECVR)->val;
-    long long base = INTEGER(MC_FRAME_ARG_0)->val;
+    obj_t     recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
+    long long val = INTEGER(recvr)->val, base;
     char      buf[32], *p;
     unsigned  n;
 
-    ASSERT(base > 0 && base <= 36);
+    if (inst_of(arg) != consts.cl.integer)  error(ERR_INVALID_ARG, arg);
+    base = INTEGER(arg)->val;
+    if (base <= 0 || base > 36)  error(ERR_INVALID_ARG, arg);
 
     for (p = &buf[ARRAY_SIZE(buf)], n = 0; n == 0 || val != 0; val /= base) {
 	long long d = val % base;
@@ -1357,20 +1487,34 @@ cm_integer_range(unsigned argc)
 void
 cm_integer_range_init(unsigned argc)
 {
-    integer_range(INTEGER(MC_FRAME_ARG_0)->val, INTEGER(MC_FRAME_RECVR)->val, 1);
+    obj_t arg = MC_FRAME_ARG_0;
+
+    if (inst_of(arg) != consts.cl.integer)  error(ERR_INVALID_ARG, arg);
+
+    integer_range(INTEGER(arg)->val, INTEGER(MC_FRAME_RECVR)->val, 1);
 }
 
 void
 cm_integer_range_init_step(unsigned argc)
 {
-    integer_range(INTEGER(MC_FRAME_ARG_0)->val, INTEGER(MC_FRAME_RECVR)->val, INTEGER(MC_FRAME_ARG_1)->val);
+    obj_t arg0 = MC_FRAME_ARG_0, arg1 = MC_FRAME_ARG_1;
+
+    if (inst_of(arg0) != consts.cl.integer)  error(ERR_INVALID_ARG, arg0);
+    if (inst_of(arg1) != consts.cl.integer)  error(ERR_INVALID_ARG, arg1);
+
+    integer_range(INTEGER(arg0)->val, INTEGER(MC_FRAME_RECVR)->val, INTEGER(arg1)->val);
 }
 
 void
 cm_integer_chr(unsigned argc)
 {
-    char c = INTEGER(MC_FRAME_RECVR)->val;
+    obj_t     recvr = MC_FRAME_RECVR;
+    long long val = INTEGER(recvr)->val;
+    char c;
 
+    if (val < 0 || val > 127)  error(ERR_INVALID_ARG, recvr);
+
+    c = val;
     string_new(0, 1, 1, &c);
 }
 
@@ -1406,7 +1550,8 @@ void
 inst_init_float(obj_t cl, obj_t inst, va_list ap)
 {
     FLOAT(inst)->val = va_arg(ap, long double);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -1518,14 +1663,16 @@ inst_init_string(obj_t cl, obj_t inst, va_list ap)
     if ((STRING(inst)->size = size) > 0) {
         STRING(inst)->data = cmalloc(STRING(inst)->size);
     }
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
 inst_free_string(obj_t cl, obj_t inst)
 {
     if (STRING(inst)->data)  _cfree(STRING(inst)->data, STRING(inst)->size);
-    cl_inst_free(CLASS(cl)->parent, inst);
+
+    inst_free_parent(cl, inst);
 }
 
 void
@@ -1655,21 +1802,43 @@ cm_string_eval(unsigned argc)
 }
 
 void
-cm_string_print(unsigned argc)
+string_print(obj_t s, FILE *fp)
 {
-    obj_t    recvr = MC_FRAME_RECVR;
     char     *p, c;
     unsigned n;
 
-    for (p = STRING(recvr)->data, n = STRING(recvr)->size; n; --n, ++p) {
+    for (p = STRING(s)->data, n = STRING(s)->size; n; --n, ++p) {
         c = *p;
 
         if (isprint(c) || isspace(c)) {
-            putchar(c);
+            putc(c, fp);
         } else {
-            printf("\\x%02x", c);
+            fprintf(fp, "\\x%02x", c);
         }
     }
+}
+
+void
+cm_string_print(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR;
+
+    method_call_0(consts.cl.file, consts.str._stdout);
+    if (inst_of(R0) != consts.cl.file)  error(ERR_INVALID_VALUE, consts.str._stdout, R0);
+
+    string_print(recvr, _FILE(R0)->fp);
+
+    vm_assign(0, recvr);
+}
+
+void
+cm_string_printc(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
+
+    if (inst_of(arg) != consts.cl.file)  error(ERR_INVALID_ARG, arg);
+
+    string_print(recvr, _FILE(arg)->fp);
 
     vm_assign(0, recvr);
 }
@@ -1795,7 +1964,8 @@ read_eval(void)
 
         if (rc != 0) break;
 
-        method_call_0(R0, consts.str.eval);
+	vm_assign(1, R0);
+        method_call_0(R1, consts.str.eval);
 	vm_assign(1, R0);
     }
     vm_assign(0, R1);
@@ -1827,7 +1997,8 @@ inst_init_dptr(obj_t cl, obj_t inst, va_list ap)
 
     OBJ_ASSIGN(DPTR(inst)->car, car);
     OBJ_ASSIGN(DPTR(inst)->cdr, cdr);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -1846,7 +2017,8 @@ inst_walk_dptr(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
   (*func)(DPTR(inst)->car);
   (*func)(DPTR(inst)->cdr);
-  cl_inst_walk(CLASS(cl)->parent, inst, func);
+
+  inst_walk_parent(cl, inst, func);
 }
 
 void
@@ -2225,14 +2397,16 @@ inst_init_method_call(obj_t cl, obj_t inst, va_list ap)
     obj_t list = va_arg(ap, obj_t);
 
     OBJ_ASSIGN(METHOD_CALL(inst)->list, list);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
 inst_walk_method_call(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     (*func)(METHOD_CALL(inst)->list);
-    cl_inst_walk(CLASS(cl)->parent, inst, func);    
+
+    inst_walk_parent(cl, inst, func);
 }
 
 void
@@ -2364,14 +2538,16 @@ inst_init_block(obj_t cl, obj_t inst, va_list ap)
     obj_t list = va_arg(ap, obj_t);
 
     OBJ_ASSIGN(BLOCK(inst)->list, list);
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
 inst_walk_block(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     (*func)(BLOCK(inst)->list);
-    cl_inst_walk(CLASS(cl)->parent, inst, func);    
+
+    inst_walk_parent(cl, inst, func);
 }
 
 void
@@ -2418,7 +2594,8 @@ inst_init_array(obj_t cl, obj_t inst, va_list ap)
     unsigned size = va_arg(ap, unsigned);
 
     ARRAY(inst)->data = zcmalloc((ARRAY(inst)->size = size) * sizeof(obj_t));
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -2430,14 +2607,16 @@ inst_walk_array(obj_t cl, obj_t inst, void (*func)(obj_t))
     if (p = ARRAY(inst)->data) {
         for (n = ARRAY(inst)->size; n; --n, ++p)  (*func)(*p);
     }
-    cl_inst_walk(CLASS(cl)->parent, inst, func);
+
+    inst_walk_parent(cl, inst, func);
 }
 
 void
 inst_free_array(obj_t cl, obj_t inst)
 {
     _cfree(ARRAY(inst)->data, ARRAY(inst)->size * sizeof(obj_t));
-    cl_inst_free(CLASS(cl)->parent, inst);
+
+    inst_free_parent(cl, inst);
 }
 
 void
@@ -2515,7 +2694,7 @@ inst_init_dict(obj_t cl, obj_t inst, va_list ap)
     DICT(inst)->hash_func  = va_arg(ap, unsigned (*)(obj_t));
     DICT(inst)->equal_func = va_arg(ap, unsigned (*)(obj_t, obj_t));
 
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -2684,20 +2863,20 @@ cm_dict_tostring(unsigned argc)
     obj_t    recvr = MC_FRAME_RECVR, *p, *q, r;
     unsigned n;
 
-    vm_push(1);
+    vm_pushm(1, 2);
 
-    vm_assign(0, NIL);
-    for (p = &R0, q = DICT(recvr)->base.data, n = DICT(recvr)->base.size; n; --n, ++q) {
+    vm_assign(1, NIL);
+    for (p = &R1, q = DICT(recvr)->base.data, n = DICT(recvr)->base.size; n; --n, ++q) {
         for (r = *q; r; r = CDR(r)) {
-            cons(1, consts.cl.list, CAR(r), NIL);
-            obj_assign(p, R1);
-            p = &CDR(R1);
+            cons(2, consts.cl.list, CAR(r), NIL);
+            obj_assign(p, R2);
+            p = &CDR(R2);
         }
     }
+    
+    method_call_0(R1, consts.str.tostring);
 
-    method_call_0(R0, consts.str.tostring);
-
-    vm_pop(1);
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -2902,7 +3081,8 @@ inst_init_file(obj_t cl, obj_t inst, va_list ap)
     _FILE(inst)->filename = filename;
     _FILE(inst)->mode     = mode;
     _FILE(inst)->fp       = fp;
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
@@ -2910,14 +3090,23 @@ inst_walk_file(obj_t cl, obj_t inst, void (*func)(obj_t))
 {
     (*func)(_FILE(inst)->filename);
     (*func)(_FILE(inst)->mode);
-    cl_inst_walk(CLASS(cl)->parent, inst, func);
+
+    inst_walk_parent(cl, inst, func);
 }
 
 void
 inst_free_file(obj_t cl, obj_t inst)
 {
     fclose(_FILE(inst)->fp);
-    cl_inst_free(CLASS(cl)->parent, inst);
+
+    inst_free_parent(cl, inst);
+}
+
+void
+file_new(unsigned dst, obj_t filename, obj_t mode, FILE *fp)
+{
+    vm_inst_alloc(0, consts.cl.file);
+    inst_init(R0, filename, mode, fp);
 }
 
 void
@@ -2935,8 +3124,7 @@ cm_file_new(unsigned argc)
 
     vm_popm(1, 2);
 
-    vm_inst_alloc(0, consts.cl.file);
-    inst_init(R0, filename, mode, fp);
+    file_new(0, filename, mode, fp);
 }
 
 void
@@ -2998,14 +3186,16 @@ inst_init_module(obj_t cl, obj_t inst, va_list ap)
     void *ptr = va_arg(ap, void *);
 
     MODULE(inst)->ptr = ptr;
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+
+    inst_init_parent(cl, inst, ap);
 }
 
 void
 inst_free_module(obj_t cl, obj_t inst)
 {
     dlclose(MODULE(inst)->ptr);
-    cl_inst_free(CLASS(cl)->parent, inst);
+
+    inst_free_parent(cl, inst);
 }
 
 void
@@ -3053,39 +3243,39 @@ const struct init_cl init_cl_tbl[] = {
       &consts.str.Code_Method,
       sizeof(struct inst_code_method),
       inst_init_code_method,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.boolean,
       &consts.cl.object,
       &consts.str.Boolean,
       sizeof(struct inst_boolean),
       inst_init_boolean,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.integer,
       &consts.cl.object,
       &consts.str.Integer,
       sizeof(struct inst_integer),
       inst_init_integer,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl._float,
       &consts.cl.object,
       &consts.str.Float,
       sizeof(struct inst_float),
       inst_init_float,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.string,
       &consts.cl.object,
       &consts.str.String,
       sizeof(struct inst_string),
       inst_init_string,
-      inst_walk_passthru,
+      inst_walk_parent,
       inst_free_string
     },
     { &consts.cl.dptr,
@@ -3094,23 +3284,23 @@ const struct init_cl init_cl_tbl[] = {
       sizeof(struct inst_dptr),
       inst_init_dptr,
       inst_walk_dptr,
-      inst_free_passthru
+      inst_free_parent
     },
     { &consts.cl.pair,
       &consts.cl.dptr,
       &consts.str.Pair,
       sizeof(struct inst_dptr),
-      inst_init_passthru,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_init_parent,
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.list,
       &consts.cl.dptr,
       &consts.str.List,
       sizeof(struct inst_dptr),
-      inst_init_passthru,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_init_parent,
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.method_call,
       &consts.cl.object,
@@ -3118,7 +3308,7 @@ const struct init_cl init_cl_tbl[] = {
       sizeof(struct inst_method_call),
       inst_init_method_call,
       inst_walk_method_call,
-      inst_free_passthru
+      inst_free_parent
     },
     { &consts.cl.block,
       &consts.cl.object,
@@ -3126,7 +3316,7 @@ const struct init_cl init_cl_tbl[] = {
       sizeof(struct inst_block),
       inst_init_block,
       inst_walk_block,
-      inst_free_passthru
+      inst_free_parent
     },
     { &consts.cl.array,
       &consts.cl.object,
@@ -3141,8 +3331,8 @@ const struct init_cl init_cl_tbl[] = {
       &consts.str.Dictionary,
       sizeof(struct inst_dict),
       inst_init_dict,
-      inst_walk_passthru,
-      inst_free_passthru
+      inst_walk_parent,
+      inst_free_parent
     },
     { &consts.cl.file,
       &consts.cl.object,
@@ -3157,7 +3347,7 @@ const struct init_cl init_cl_tbl[] = {
       &consts.str.Module,
       sizeof(struct inst_module),
       inst_init_module,
-      inst_walk_passthru,
+      inst_walk_parent,
       inst_free_module
     },
     /* Not really instantiable... */
@@ -3239,10 +3429,13 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.newc_parentc_instance_variablesc, "new:parent:instance-variables:" },
     { &consts.str.newc_valuec, "new:value:" },
     { &consts.str.nil,         "#nil" },
+    { &consts.str.not,         "not" },
+    { &consts.str.orc,         "or:" },
     { &consts.str.parent,      "parent" },
     { &consts.str.pop,         "pop" },
     { &consts.str.pquote,      "pquote" },
     { &consts.str.print,       "print" },
+    { &consts.str.printc,      "print:" },
     { &consts.str.push,        "push" },
     { &consts.str.quote,       "quote" },
     { &consts.str.range,       "range" },
@@ -3254,13 +3447,17 @@ const struct init_str init_str_tbl[] = {
     { &consts.str._return,     "return" },
     { &consts.str.rindexc,     "rindex:" },
     { &consts.str.shellc,      "shell:" },
+    { &consts.str._stderr,     "stderr" },
+    { &consts.str._stdin,      "stdin" },
+    { &consts.str._stdout,     "stdout" },
     { &consts.str.splicec,     "splice:" },
     { &consts.str.splitc,      "split:" },
     { &consts.str.subc,        "sub:" },
     { &consts.str.tostring,    "tostring" },
     { &consts.str.tostringc,   "tostring:" },
     { &consts.str._true,       "#true" },
-    { &consts.str.whilec,      "while:" }
+    { &consts.str.whilec,      "while:" },
+    { &consts.str.xorc,        "xor:" }
 #ifdef DEBUG
     ,
     { &consts.str.assertc,     "assert:" },
@@ -3271,6 +3468,7 @@ const struct init_str init_str_tbl[] = {
 
 const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.metaclass,   &consts.str.name,               cm_meta_metaclass_name },
+    { &consts.cl.metaclass,   &consts.str.tostring,           cm_meta_metaclass_tostring },
     { &consts.cl.metaclass,   &consts.str.parent,             cm_meta_metaclass_parent },
     { &consts.cl.metaclass,   &consts.str.class_methods,      cm_meta_metaclass_cl_methods },
     { &consts.cl.metaclass,   &consts.str.class_variables,    cm_meta_metaclass_cl_vars },
@@ -3313,12 +3511,17 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.object,      &consts.str.equalsc,    cm_object_eq },
     { &consts.cl.object,      &consts.str.tostring,   cm_object_tostring },
     { &consts.cl.object,      &consts.str.print,      cm_object_print },
+    { &consts.cl.object,      &consts.str.printc,     cm_object_printc },
     { &consts.cl.object,      &consts.str.appendc,    cm_object_append },
     { &consts.cl.metaclass,   &consts.str.name,       cm_metaclass_name },
+    { &consts.cl.metaclass,   &consts.str.tostring,   cm_metaclass_tostring },
     { &consts.cl.metaclass,   &consts.str.parent,     cm_metaclass_parent },
     { &consts.cl.metaclass,   &consts.str.instance_variables, cm_metaclass_inst_vars },
     { &consts.cl.code_method, &consts.str.evalc,      cm_code_method_eval },
     { &consts.cl.boolean,     &consts.str.andc,       cm_boolean_and },
+    { &consts.cl.boolean,     &consts.str.orc,        cm_boolean_or },
+    { &consts.cl.boolean,     &consts.str.xorc,       cm_boolean_xor },
+    { &consts.cl.boolean,     &consts.str.not,        cm_boolean_not },
     { &consts.cl.boolean,     &consts.str.ifc,        cm_boolean_if },
     { &consts.cl.boolean,     &consts.str.ifc_elsec,  cm_boolean_if_else },
     { &consts.cl.boolean,     &consts.str.tostring,   cm_boolean_tostring },
@@ -3354,6 +3557,7 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.string,      &consts.str.tostring,   cm_string_tostring },
     { &consts.cl.string,      &consts.str.eval,       cm_string_eval },
     { &consts.cl.string,      &consts.str.print,      cm_string_print },
+    { &consts.cl.string,      &consts.str.printc,     cm_string_printc },
     { &consts.cl.string,      &consts.str.length,     cm_string_len },
     { &consts.cl.string,      &consts.str.atc,        cm_string_at },
     { &consts.cl.string,      &consts.str.atc_lengthc, cm_string_at_len },
@@ -3508,9 +3712,9 @@ env_init(void)
     OBJ_ASSIGN(consts.cl.metaclass, (obj_t) zcmalloc(sizeof(struct inst_metaclass)));
     list_insert(&consts.cl.metaclass->list_node, LIST_END(OBJ_LIST_ACTIVE));
     CLASS(consts.cl.metaclass)->inst_size = sizeof(struct inst_metaclass);
-    CLASS(consts.cl.metaclass)->inst_init = inst_init_passthru;
+    CLASS(consts.cl.metaclass)->inst_init = inst_init_parent;
     CLASS(consts.cl.metaclass)->inst_walk = inst_walk_metaclass;
-    CLASS(consts.cl.metaclass)->inst_free = inst_free_passthru;
+    CLASS(consts.cl.metaclass)->inst_free = inst_free_parent;
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         vm_inst_alloc(0, consts.cl.metaclass);
         obj_assign(init_cl_tbl[i].pcl, R0);
@@ -3524,6 +3728,8 @@ env_init(void)
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         if (init_cl_tbl[i].pparent)  OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->parent, *init_cl_tbl[i].pparent);
     }
+
+    OBJ_ASSIGN(consts.cl.metaclass->inst_of, consts.cl.object);
 
     string_dict_new(0, 16);
     OBJ_ASSIGN(CLASS(consts.cl.metaclass)->cl_methods, R0);
@@ -3558,6 +3764,13 @@ env_init(void)
     env_at_put(consts.str._true, R1);
     boolean_new(1, 0);
     env_at_put(consts.str._false, R1);
+
+    file_new(0, NIL, NIL, stdin);
+    dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stdin, R0);
+    file_new(0, NIL, NIL, stdout);
+    dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stdout, R0);
+    file_new(0, NIL, NIL, stderr);
+    dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stderr, R0);
 
     OBJ_ASSIGN(CLASS(consts.cl.metaclass)->name, consts.str.Metaclass);
     env_at_put(consts.str.Metaclass, consts.cl.metaclass);
@@ -3648,8 +3861,10 @@ main(void)
 
         while (sp < stack_end)  vm_drop(); /* Discard all objs created during parsing */
 
-        method_call_0(R0, consts.str.eval);
-        method_call_0(R0, consts.str.print);
+	vm_assign(1, R0);
+        method_call_0(R1, consts.str.eval);
+	vm_assign(1, R0);
+        method_call_0(R1, consts.str.print);
     }
 
     fini();
