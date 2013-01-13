@@ -271,7 +271,7 @@ method_call_sel_and_args:
         ;
 
 method_call:
-	TOK_LSQBR sym TOK_EQUAL expr TOK_RSQBR
+	TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
 {
     vm_pushm(1, 2);
 
@@ -292,7 +292,7 @@ method_call:
     vm_push(0);
     $$ = R0;
 }
-	| TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
+	| TOK_LSQBR sym TOK_EQUAL expr TOK_RSQBR
 {
     vm_pushm(1, 2);
 

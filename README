@@ -1,10 +1,6 @@
 * TODO
 
-- "programming" methods
-  - while:    inst method of Object; eval receiver, if true, eval body & repeat
-  - break     inst method of Object; break out of while, while returns recvr
-  - continue  class method of Object; next iter of while
-  - return    inst method of Object; break out of block, block returns recvr
+- perhaps a shortcut for a sequence of exprs, eg. {{ ... }} for [{() ... } eval: ()]
 - with indirect calling of methods, cannot assume type of receiver
 - resolve reference count differences before and after marking
   - alloc/retain/release/free sequence vs. marking, which always starts at root set

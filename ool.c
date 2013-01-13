@@ -348,9 +348,6 @@ obj_release(obj_t obj)
 
     /* Reference loops do exist, so release of an obj with ref_cnt == 0 can
        happen, as freeing progresses.
-       Known reference loops include:
-         inst_of(parent(#Metaclass) == #Metaclass
-         inst_of(name(#String)) == #String
     */
 
     if (obj == NIL || obj->ref_cnt == 0)  return;
@@ -636,7 +633,10 @@ enum errcode {
     ERR_INVALID_METHOD,
     ERR_INVALID_ARG,
     ERR_INVALID_VALUE,
-    ERR_NUM_ARGS
+    ERR_NUM_ARGS,
+    ERR_BREAK,
+    ERR_CONT,
+    ERR_RETURN
 };
 
 void error(enum errcode errcode, ...);
@@ -870,6 +870,15 @@ error(enum errcode errcode, ...)
     case ERR_NUM_ARGS:
 	fprintf(fp, "Incorrect number of arguments");
 	break;
+    case ERR_BREAK:
+	fprintf(fp, "break not within while:");
+	break;
+    case ERR_CONT:
+	fprintf(fp, "continue not within while:");
+	break;
+    case ERR_RETURN:
+	fprintf(fp, "return not within block");
+	break;
     default:
 	ASSERT(0);
     }
@@ -897,8 +906,6 @@ Instance-of
       Integer
       ...
 
-  - Reference loop
-
 Parent
 
   Object
@@ -906,6 +913,12 @@ Parent
     Boolean
     Integer
     ...
+
+
+Known reference loops include:
+  inst_of(parent(#Metaclass) == #Metaclass
+  inst_of(inst_of(#Metaclass)) == #Metaclass
+  inst_of(name(#String)) == #String
 
 ***************************************************************************/
 
@@ -1132,12 +1145,119 @@ cm_object_append(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
+    if (recvr != NIL)                    error(ERR_INVALID_ARG, recvr);
     if (argc != 1)                       error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (recvr != NIL)                    error(ERR_INVALID_ARG, recvr);
     if (inst_of(arg) != consts.cl.list)  error(ERR_INVALID_ARG, arg);
 
     vm_assign(0, arg);
+}
+
+enum {
+    WB_BREAK = 1,
+    WB_CONT,
+    WB_RETURN
+};
+
+struct wb_frame {
+    struct wb_frame *prev;
+
+    enum {
+	WBF_TYPE_WHILE,
+	WBF_TYPE_BLOCK
+    } type;
+
+    jmp_buf jmp_buf;
+} *wbfp;
+
+void
+cm_object_while(unsigned argc)
+{
+    obj_t           recvr = MC_FRAME_RECVR, arg;
+    struct wb_frame wbf[1];
+    obj_t           *sp_save;
+    struct mc_frame *mcfp_save;
+    int             rc;
+
+    if (argc != 1)  error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+
+    wbf->prev = wbfp;
+    wbfp = wbf;
+    wbfp->type = WBF_TYPE_WHILE;
+
+    mcfp_save = mcfp;
+    sp_save   = sp;
+    
+    if ((rc = setjmp(wbfp->jmp_buf)) != 0) {
+	mcfp = mcfp_save;
+	while (sp < sp_save)  vm_drop();
+
+	switch (rc) {
+	case WB_CONT:
+	    break;
+	case WB_BREAK:
+	    goto done;
+	default:
+	    ASSERT(0);
+	}
+    }
+
+    for (;;) {
+	method_call_0(recvr, consts.str.eval);
+	if (inst_of(R0) != consts.cl.boolean)  error(ERR_INVALID_VALUE, recvr, R0);
+	if (!BOOLEAN(R0)->val)  break;
+	method_call_0(arg, consts.str.eval);
+    }
+
+ done:
+    wbfp = wbfp->prev;
+}
+
+void
+cm_object_break(unsigned argc)
+{
+    struct wb_frame *p;
+
+    if (argc != 0)  error(ERR_NUM_ARGS);
+    for (p = wbfp; p; p = p->prev) {
+	if (p->type == WBF_TYPE_WHILE)  break;
+    }
+    if (p == 0)  error(ERR_BREAK);
+
+    vm_assign(0, MC_FRAME_RECVR);
+
+    longjmp(p->jmp_buf, WB_BREAK);
+}
+
+void
+cm_object_cont(unsigned argc)
+{
+    struct wb_frame *p;
+
+    if (argc != 0)  error(ERR_NUM_ARGS);
+    for (p = wbfp; p; p = p->prev) {
+	if (p->type == WBF_TYPE_WHILE)  break;
+    }
+    if (p == 0)  error(ERR_CONT);
+
+    longjmp(p->jmp_buf, WB_CONT);
+}
+
+void
+cm_object_return(unsigned argc)
+{
+    struct wb_frame *p;
+
+    if (argc != 0)  error(ERR_NUM_ARGS);
+    for (p = wbfp; p; p = p->prev) {
+	if (p->type == WBF_TYPE_BLOCK)  break;
+    }
+    if (p == 0)  error(ERR_RETURN);
+
+    vm_assign(0, MC_FRAME_RECVR);
+
+    longjmp(p->jmp_buf, WB_RETURN);
 }
 
 /***************************************************************************/
@@ -2682,7 +2802,11 @@ void env_push(void), env_pop(void);
 void
 cm_block_eval(unsigned argc)
 {
-    obj_t p, q;
+    obj_t           p, q;
+    struct wb_frame wbf[1];
+    obj_t           *sp_save;
+    struct mc_frame *mcfp_save;
+    int             rc;
     
     env_push();
     
@@ -2690,11 +2814,31 @@ cm_block_eval(unsigned argc)
         env_new(CAR(p), CAR(q));
     }
 
+    wbf->prev = wbfp;
+    wbfp = wbf;
+    wbfp->type = WBF_TYPE_BLOCK;
+
+    mcfp_save = mcfp;
+    sp_save   = sp;
+    
+    if ((rc = setjmp(wbfp->jmp_buf)) != 0) {
+	mcfp = mcfp_save;
+	while (sp < sp_save)  vm_drop();
+
+	switch (rc) {
+	case WB_RETURN:
+	    goto done;
+	default:
+	    ASSERT(0);
+	}
+    }
+
     vm_assign(0, NIL);
     for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
         method_call_0(CAR(p), consts.str.eval);
     }
 
+ done:
     env_pop();
 }
 
@@ -3596,6 +3740,7 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.metaclass,   &consts.str.instance_variables, cm_meta_metaclass_inst_vars },
     { &consts.cl.metaclass,   &consts.str.newc_parentc_instance_variablesc, cm_metaclass_new },
     { &consts.cl.object,      &consts.str.new,      cm_object_new },
+    { &consts.cl.object,      &consts.str._continue, cm_object_cont },
     { &consts.cl.integer,     &consts.str.new,      cm_integer_new },
     { &consts.cl.integer,     &consts.str.newc,     cm_integer_new },
     { &consts.cl._float,      &consts.str.new,      cm_float_new },
@@ -3633,6 +3778,9 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.object,      &consts.str.print,      cm_object_print },
     { &consts.cl.object,      &consts.str.printc,     cm_object_printc },
     { &consts.cl.object,      &consts.str.appendc,    cm_object_append },
+    { &consts.cl.object,      &consts.str.whilec,     cm_object_while },
+    { &consts.cl.object,      &consts.str._break,     cm_object_break },
+    { &consts.cl.object,      &consts.str._return,    cm_object_return },
     { &consts.cl.metaclass,   &consts.str.name,       cm_metaclass_name },
     { &consts.cl.metaclass,   &consts.str.tostring,   cm_metaclass_tostring },
     { &consts.cl.metaclass,   &consts.str.parent,     cm_metaclass_parent },
@@ -3973,6 +4121,7 @@ main(void)
     yy_popall();
     while (sp < stack_end)  vm_drop();
     mcfp = 0;
+    wbfp  = 0;
 
     for (;;) {
         printf("\nok ");

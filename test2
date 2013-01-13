@@ -36,7 +36,7 @@
 	 ]
 [[Point instance-methods] at: "add:" put:
 	 {(self p)
-	  [result = [Point new]]
+	  [result := [Point new]]
 	  [result x: [[self x] add: [p x]]]
 	  [result y: [[self y] add: [p y]]]
 	  result
