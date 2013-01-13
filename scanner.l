@@ -137,7 +137,7 @@ NDQUOTE         [^\"]
         c = input();
     } while (!(c == '\n' || c == EOF));
 
-    ++yysp->line;
+    if (yysp)  ++yysp->line;
 }
 
 "\n"	{ if (yysp)  ++yysp->line; }

@@ -929,43 +929,66 @@ meta_metaclass_walk(obj_t inst, void (*func)(obj_t))
 void
 cm_meta_metaclass_name(unsigned argc)
 {
-    if (argc != 0)  error(ERR_NUM_ARGS);
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
 
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+    vm_assign(0, CLASS(recvr)->name);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_tostring(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+    cm_meta_metaclass_name(argc);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_parent(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->parent);
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->parent);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_cl_methods(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->cl_methods);
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->cl_methods);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_cl_vars(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->cl_vars);
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->cl_vars);
 }
 
 /* Installed as a class method of Metaclass */
 void
 cm_meta_metaclass_inst_methods(unsigned argc)
 {
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
+
     vm_assign(0, NIL);
 }
 
@@ -973,6 +996,11 @@ cm_meta_metaclass_inst_methods(unsigned argc)
 void
 cm_meta_metaclass_inst_vars(unsigned argc)
 {
+    obj_t recvr = MC_FRAME_RECVR;
+    
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                     error(ERR_NUM_ARGS);
+
     /* Must be hard-coded, because
        inst_vars(#Metaclass) only has mutable ones
     */
@@ -1010,36 +1038,44 @@ inst_free_object(obj_t cl, obj_t inst)
 void
 cm_object_new(unsigned argc)
 {
+    if (argc != 0)  error(ERR_NUM_ARGS);
+
     vm_inst_alloc(0, MC_FRAME_RECVR);
 }
 
 void
 cm_object_quote(unsigned argc)
 {
+    if (argc != 0)  error(ERR_NUM_ARGS);
+
     vm_assign(0, MC_FRAME_RECVR);
 }
 
 void
 cm_object_pquote(unsigned argc)
 {
-    vm_assign(0, MC_FRAME_RECVR);
+    cm_object_quote(argc);
 }
 
 void
 cm_object_eval(unsigned argc)
 {
-    vm_assign(0, MC_FRAME_RECVR);
+    cm_object_quote(argc);
 }
 
 void
 cm_object_instof(unsigned argc)
 {
+    if (argc != 0)  error(ERR_NUM_ARGS);
+
     vm_assign(0, inst_of(MC_FRAME_RECVR));
 }
 
 void
 cm_object_eq(unsigned argc)
 {
+    if (argc != 1)  error(ERR_NUM_ARGS);
+
     boolean_new(0, MC_FRAME_RECVR == MC_FRAME_ARG_0);
 }
 
@@ -1048,6 +1084,8 @@ cm_object_tostring(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, cl_name;
     char  buf[64];
+
+    if (argc != 0)  error(ERR_NUM_ARGS);
 
     if (recvr == NIL) {
         vm_assign(0, consts.str.nil);
@@ -1066,6 +1104,8 @@ cm_object_print(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
+    if (argc != 0)  error(ERR_NUM_ARGS);
+
     method_call_0(recvr, consts.str.tostring);
     vm_assign(1, R0);
     method_call_0(R1, consts.str.print);
@@ -1078,6 +1118,8 @@ cm_object_printc(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
+    if (argc != 1)  error(ERR_NUM_ARGS);
+
     method_call_0(recvr, consts.str.tostring);
     vm_assign(1, R0);
     method_call_1(R1, consts.str.printc, MC_FRAME_ARG_0);
@@ -1088,8 +1130,10 @@ cm_object_printc(unsigned argc)
 void
 cm_object_append(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg;
 
+    if (argc != 1)                       error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
     if (recvr != NIL)                    error(ERR_INVALID_ARG, recvr);
     if (inst_of(arg) != consts.cl.list)  error(ERR_INVALID_ARG, arg);
 
@@ -1116,19 +1160,34 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 cm_metaclass_name(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->name);
 }
 
 void
 cm_metaclass_tostring(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->name);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->name);
 }
 
 void
 cm_metaclass_parent(unsigned argc)
 {
-    vm_assign(0, CLASS(MC_FRAME_RECVR)->parent);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
+
+    vm_assign(0, CLASS(recvr)->parent);
 }
 
 void dict_keys(obj_t dict);
@@ -1136,7 +1195,12 @@ void dict_keys(obj_t dict);
 void
 cm_metaclass_inst_vars(unsigned argc)
 {
-    dict_keys(CLASS(MC_FRAME_RECVR)->inst_vars);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
+
+    dict_keys(CLASS(recvr)->inst_vars);
 }
 
 void
@@ -1161,8 +1225,11 @@ obj_t env_new(obj_t, obj_t);
 void
 cm_metaclass_new(unsigned argc)
 {
+    obj_t    recvr = MC_FRAME_RECVR, p;
     unsigned inst_size;
-    obj_t    p;
+
+    if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 3)                     error(ERR_NUM_ARGS);
 
     vm_push(1);
 
@@ -1220,7 +1287,8 @@ cm_code_method_eval(unsigned argc)
     obj_t    recvr = MC_FRAME_RECVR, args;
     unsigned nargs;
 
-    if (argc != 1)  error(ERR_NUM_ARGS);
+    if (inst_of(recvr) != consts.cl.code_method)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                                error(ERR_NUM_ARGS);
     args = MC_FRAME_ARG_0;
     if (inst_of(args) != consts.cl.list)  error(ERR_INVALID_ARG, args);
     nargs = list_len(args);
@@ -1256,37 +1324,84 @@ boolean_new(unsigned dst, unsigned val)
 void
 cm_boolean_and(unsigned argc)
 {
-    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val && BOOLEAN(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+
+    boolean_new(0, BOOLEAN(recvr)->val && BOOLEAN(arg)->val);
 }
 
 void
 cm_boolean_or(unsigned argc)
 {
-    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val || BOOLEAN(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+
+    boolean_new(0, BOOLEAN(recvr)->val || BOOLEAN(arg)->val);
 }
 
 void
 cm_boolean_xor(unsigned argc)
 {
-    boolean_new(0, BOOLEAN(MC_FRAME_RECVR)->val ^ BOOLEAN(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+
+    boolean_new(0, BOOLEAN(recvr)->val ^ BOOLEAN(arg)->val);
 }
 
 void
 cm_boolean_not(unsigned argc)
 {
-    boolean_new(0, !BOOLEAN(MC_FRAME_RECVR)->val);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    boolean_new(0, !BOOLEAN(recvr)->val);
 }
 
 void
 cm_boolean_tostring(unsigned argc)
 {
-    vm_assign(0, BOOLEAN(MC_FRAME_RECVR)->val ? consts.str._true : consts.str._false);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    vm_assign(0, BOOLEAN(recvr)->val ? consts.str._true : consts.str._false);
+}
+
+void
+cm_boolean_equals(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+
+    boolean_new(0, BOOLEAN(recvr)->val == BOOLEAN(arg)->val);
 }
 
 void
 cm_boolean_if(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
 
     if (BOOLEAN(recvr)->val) {
 	method_call_0(MC_FRAME_ARG_0, consts.str.eval);
@@ -1298,7 +1413,12 @@ cm_boolean_if(unsigned argc)
 void
 cm_boolean_if_else(unsigned argc)
 {
-    method_call_0(BOOLEAN(MC_FRAME_RECVR)->val ? MC_FRAME_ARG_0 : MC_FRAME_ARG_1, consts.str.eval);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 2)                            error(ERR_NUM_ARGS);
+
+    method_call_0(BOOLEAN(recvr)->val ? MC_FRAME_ARG_0 : MC_FRAME_ARG_1, consts.str.eval);
 }
 
 /***************************************************************************/
@@ -3525,6 +3645,7 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.boolean,     &consts.str.ifc,        cm_boolean_if },
     { &consts.cl.boolean,     &consts.str.ifc_elsec,  cm_boolean_if_else },
     { &consts.cl.boolean,     &consts.str.tostring,   cm_boolean_tostring },
+    { &consts.cl.boolean,     &consts.str.equalsc,    cm_boolean_equals },
     { &consts.cl.integer,     &consts.str.equalsc,    cm_integer_equals },
     { &consts.cl.integer,     &consts.str.addc,       cm_integer_add },
     { &consts.cl.integer,     &consts.str.subc,       cm_integer_sub },
