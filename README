@@ -1,5 +1,6 @@
 * TODO
 
+- exceptions?
 - perhaps a shortcut for a sequence of exprs, eg. {{ ... }} for [{() ... } eval: ()]
 - with indirect calling of methods, cannot assume type of receiver
 - use GNU autobuild

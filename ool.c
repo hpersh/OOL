@@ -645,7 +645,8 @@ enum errcode {
     ERR_BREAK,
     ERR_CONT,
     ERR_RETURN,
-    ERR_FILE_OPEN
+    ERR_FILE_OPEN,
+    ERR_OVF
 };
 
 jmp_buf jmp_buf_top;
@@ -660,8 +661,11 @@ bt_print(obj_t outf)
 
     fprintf(fp, "Backtrace:\n");
     for (p = mcfp; p; p = p->prev) {
-	method_call_1(p->sel, consts.str.printc, outf);
+	fprintf(fp, "[");
+	method_call_1(p->cl, consts.str.printc, outf);
 	fprintf(fp, " ");
+	method_call_1(p->sel, consts.str.printc, outf);
+	fprintf(fp, "]");
 	method_call_1(p->args, consts.str.printc, outf);
 	fprintf(fp, "\n");
     }
@@ -746,6 +750,9 @@ error(enum errcode errcode, ...)
 	obj = va_arg(ap, obj_t);
 	method_call_1(obj, consts.str.printc, outf);
 	break;
+    case ERR_OVF:
+	fprintf(fp, "Arithmetic overflow");
+	break;
     default:
 	ASSERT(0);
     }
@@ -766,6 +773,7 @@ error(enum errcode errcode, ...)
     {                                           \
 	struct mc_frame __mcf[1];		\
 						\
+	memset(__mcf, 0, sizeof(*__mcf));	\
 	__mcf->prev = mcfp;			\
 	mcfp = __mcf;				\
 	mcfp->sel  = (s);			\
@@ -780,8 +788,10 @@ obj_t dict_at(obj_t dict, obj_t key);
 void  dict_at_put(obj_t dict, obj_t key, obj_t val);
 
 void
-method_run(obj_t func, unsigned argc)
+method_run(obj_t cl, obj_t func, unsigned argc)
 {
+    mcfp->cl = cl;
+
     if (inst_of(func) == consts.cl.code_method) {
         (* CODE_METHOD(func)->func)(argc);
         
@@ -829,7 +839,7 @@ method_call(unsigned argc)
 	    }
 
             if (obj = dict_at(CLASS(cl)->cl_methods, sel)) {
-                method_run(CDR(obj), argc);
+                method_run(cl, CDR(obj), argc);
                 goto done;
             }
         }
@@ -849,11 +859,16 @@ method_call(unsigned argc)
         }
 
         if (obj = dict_at(CLASS(cl)->inst_methods, sel)) {
-            method_run(CDR(obj), argc);
+            method_run(cl, CDR(obj), argc);
             goto done;
         }
     }
 
+    cl = inst_of(recvr);
+    if (recvr == consts.cl.metaclass || cl == consts.cl.metaclass) {
+	cl = recvr;
+    }
+    mcfp->cl = cl;
     error(ERR_NO_METHOD, sel);
 
  done:
@@ -1656,17 +1671,26 @@ cm_integer_tostring_base(unsigned argc)
 void
 cm_integer_hash(unsigned argc)
 {
-    vm_assign(0, MC_FRAME_RECVR);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    vm_assign(0, recvr);
 }
 
 void
 cm_integer_equals(unsigned argc)
 {
-    obj_t arg = MC_FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
 		inst_of(arg) == consts.cl.integer
-		&& INTEGER(MC_FRAME_RECVR)->val == INTEGER(arg)->val
+		&& INTEGER(recvr)->val == INTEGER(arg)->val
 		);
 }
 
@@ -1679,7 +1703,14 @@ cm_integer_minus(unsigned argc)
 void
 cm_integer_add(unsigned argc)
 {
-    integer_new(0, INTEGER(MC_FRAME_RECVR)->val + INTEGER(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+
+    integer_new(0, INTEGER(recvr)->val + INTEGER(arg)->val);
 }
 
 void

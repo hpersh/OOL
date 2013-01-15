@@ -148,7 +148,7 @@ void inst_init(obj_t recvr, ...);
 
 struct mc_frame {
     struct mc_frame *prev;
-    obj_t           sel, args;
+    obj_t           cl, sel, args;
 } *mcfp;
 
 #define MC_FRAME_SEL       (mcfp->sel)
