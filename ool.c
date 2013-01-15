@@ -444,6 +444,9 @@ root_mark(void)
         for (p = LIST_FIRST(OBJ_LIST_ACTIVE); p != LIST_END(OBJ_LIST_ACTIVE); p = p->next) {
             obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
             
+#ifdef DEBUG
+	    q->old_ref_cnt = q->ref_cnt;
+#endif
             q->ref_cnt = 0;
         }
     }
@@ -468,12 +471,7 @@ root_mark(void)
             obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
 
             ASSERT(q->ref_cnt != 0);
-
-	    /* Can reference loops cause ref_cnt different after marking?
-	       Marking always starts wit root set, but reference counting
-	       during normal alloc/retain/release/free operations may
-	       be something different?
-	    */
+	    ASSERT(q->ref_cnt == q->old_ref_cnt);
         }
     }
 #endif
@@ -555,10 +553,14 @@ vm_inst_alloc(unsigned dst, obj_t cl)
 
 #endif
 
+#define VM_STACK_CHK_DN(n)  do { if ((sp - (n)) < stack)      fatal(FATAL_ERR_STACK_OVERFLOW); } while (0)
+#define VM_STACK_CHK_UP(n)  do { if ((sp + (n)) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW); } while (0)
+
+
 void
 vm_pushl(obj_t obj)
 {
-    if (sp <= stack)  fatal(FATAL_ERR_STACK_OVERFLOW);
+    VM_STACK_CHK_DN(1);
 
     VM_STATS_UPDATE_PUSH(1);
 
@@ -576,7 +578,7 @@ vm_pushm(unsigned src, unsigned n)
 {
     obj_t *p;
 
-    if ((sp - n) < stack)  fatal(FATAL_ERR_STACK_OVERFLOW);
+    VM_STACK_CHK_DN(n);
 
     VM_STATS_UPDATE_PUSH(n);
 
@@ -586,7 +588,7 @@ vm_pushm(unsigned src, unsigned n)
 void
 vm_pop(unsigned dst)
 {
-    if (sp >= stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+    VM_STACK_CHK_UP(1);
 
     VM_STATS_UPDATE_POP(1);
 
@@ -598,7 +600,7 @@ vm_popm(unsigned dst, unsigned n)
 {
     obj_t *p;
 
-    if ((sp + n) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+    VM_STACK_CHK_UP(n);
 
     VM_STATS_UPDATE_POP(n);
 
@@ -608,7 +610,7 @@ vm_popm(unsigned dst, unsigned n)
 void
 vm_drop(void)
 {
-    if (sp >= stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+    VM_STACK_CHK_UP(1);
 
     VM_STATS_UPDATE_POP(1);
 
@@ -618,12 +620,18 @@ vm_drop(void)
 void
 vm_dropn(unsigned n)
 {
-    if ((sp + n) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW);
+    VM_STACK_CHK_UP(n);
 
     VM_STATS_UPDATE_POP(n);
 
     for (; n; --n)  obj_release(*sp++);
 }
+
+/***************************************************************************/
+
+void method_call_0(obj_t recvr, obj_t sel);
+void method_call_1(obj_t recvr, obj_t sel, obj_t arg1);
+void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
 
 /***************************************************************************/
 
@@ -636,10 +644,121 @@ enum errcode {
     ERR_NUM_ARGS,
     ERR_BREAK,
     ERR_CONT,
-    ERR_RETURN
+    ERR_RETURN,
+    ERR_FILE_OPEN
 };
 
-void error(enum errcode errcode, ...);
+jmp_buf jmp_buf_top;
+
+unsigned err_depth;
+
+void
+bt_print(obj_t outf)
+{
+    FILE            *fp = _FILE(outf)->fp;
+    struct mc_frame *p;
+
+    fprintf(fp, "Backtrace:\n");
+    for (p = mcfp; p; p = p->prev) {
+	method_call_1(p->sel, consts.str.printc, outf);
+	fprintf(fp, " ");
+	method_call_1(p->args, consts.str.printc, outf);
+	fprintf(fp, "\n");
+    }
+}
+
+void
+error(enum errcode errcode, ...)
+{
+    obj_t   outf;
+    FILE    *fp;
+    va_list ap;
+    obj_t   obj;
+    void    *cookie;
+
+    if (err_depth > 0) {
+	fatal(FATAL_ERR_DOUBLE_ERR);
+    }
+    ++err_depth;
+
+    method_call_0(consts.cl.file, consts.str._stderr);
+    if (inst_of(R0) != consts.cl.file) {
+	fatal(FATAL_ERR_BAD_ERR_STREAM);
+    }
+    fp = _FILE(outf = R0)->fp;
+
+    fprintf(fp, "\n");
+    if (cookie = yycookie()) {
+	fprintf(fp, "File ");
+	method_call_1(_FILE(cookie)->filename, consts.str.printc, outf);
+	fprintf(fp, ", line %d\n", yyline());
+    }
+
+    va_start(ap, errcode);
+    
+    switch (errcode) {
+    case ERR_SYM_NOT_BOUND:
+	fprintf(fp, "Symbol not bound: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_NO_METHOD:
+	fprintf(fp, "No such method: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_INVALID_METHOD:
+	fprintf(fp, "Invalid method: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_INVALID_ARG:
+	fprintf(fp, "Invalid argument: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    case ERR_INVALID_VALUE:
+	{
+	    obj_t obj2;
+
+	    obj  = va_arg(ap, obj_t);
+	    obj2 = va_arg(ap, obj_t);
+	    fprintf(fp, "Invalid value for ");
+	    method_call_1(obj, consts.str.printc, outf);
+	    fprintf(fp, ": ");
+	    method_call_1(obj2, consts.str.printc, outf);
+	}
+	break;
+    case ERR_NUM_ARGS:
+	fprintf(fp, "Incorrect number of arguments");
+	break;
+    case ERR_BREAK:
+	fprintf(fp, "break not within while:");
+	break;
+    case ERR_CONT:
+	fprintf(fp, "continue not within while:");
+	break;
+    case ERR_RETURN:
+	fprintf(fp, "return not within block");
+	break;
+    case ERR_FILE_OPEN:
+	fprintf(fp, "Could not open file ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
+	break;
+    default:
+	ASSERT(0);
+    }
+
+    fprintf(fp, "\n");
+    bt_print(outf);
+
+    va_end(ap);
+
+    --err_depth;
+
+    longjmp(jmp_buf_top, 1);
+}
 
 /***************************************************************************/
 
@@ -656,28 +775,9 @@ void error(enum errcode errcode, ...);
         mcfp = mcfp->prev;			\
     }
 
-void method_call_0(obj_t recvr, obj_t sel);
-void method_call_1(obj_t recvr, obj_t sel, obj_t arg1);
-void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
-
 unsigned string_hash(obj_t s), string_equal(obj_t s1, obj_t s2);
 obj_t dict_at(obj_t dict, obj_t key);
 void  dict_at_put(obj_t dict, obj_t key, obj_t val);
-
-void
-bt_print(obj_t outf)
-{
-    FILE            *fp = _FILE(outf)->fp;
-    struct mc_frame *p;
-
-    fprintf(fp, "Backtrace:\n");
-    for (p = mcfp; p; p = p->prev) {
-	method_call_1(p->sel, consts.str.printc, outf);
-	fprintf(fp, " ");
-	method_call_1(p->args, consts.str.printc, outf);
-	fprintf(fp, "\n");
-    }
-}
 
 void
 method_run(obj_t func, unsigned argc)
@@ -799,100 +899,6 @@ method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
     vm_dropn(2);
 }
 
-/***************************************************************************/
-
-jmp_buf jmp_buf_top;
-
-unsigned err_depth;
-
-void
-error(enum errcode errcode, ...)
-{
-    obj_t   outf;
-    FILE    *fp;
-    va_list ap;
-    obj_t   obj;
-    void    *cookie;
-
-    if (err_depth > 0) {
-	fatal(FATAL_ERR_DOUBLE_ERR);
-    }
-    ++err_depth;
-
-    method_call_0(consts.cl.file, consts.str._stderr);
-    if (inst_of(R0) != consts.cl.file) {
-	fatal(FATAL_ERR_BAD_ERR_STREAM);
-    }
-    fp = _FILE(outf = R0)->fp;
-
-    if (cookie = yycookie()) {
-	fprintf(fp, "File ");
-	method_call_1(_FILE(cookie)->filename, consts.str.printc, outf);
-	fprintf(fp, ", line %d\n", yyline());
-    }
-
-    va_start(ap, errcode);
-    
-    fprintf(fp, "\n");
-    switch (errcode) {
-    case ERR_SYM_NOT_BOUND:
-	fprintf(fp, "Symbol not bound: ");
-	obj = va_arg(ap, obj_t);
-	method_call_1(obj, consts.str.printc, outf);
-	break;
-    case ERR_NO_METHOD:
-	fprintf(fp, "No such method: ");
-	obj = va_arg(ap, obj_t);
-	method_call_1(obj, consts.str.printc, outf);
-	break;
-    case ERR_INVALID_METHOD:
-	fprintf(fp, "Invalid method: ");
-	obj = va_arg(ap, obj_t);
-	method_call_1(obj, consts.str.printc, outf);
-	break;
-    case ERR_INVALID_ARG:
-	fprintf(fp, "Invalid argument: ");
-	obj = va_arg(ap, obj_t);
-	method_call_1(obj, consts.str.printc, outf);
-	break;
-    case ERR_INVALID_VALUE:
-	{
-	    obj_t obj2;
-
-	    obj  = va_arg(ap, obj_t);
-	    obj2 = va_arg(ap, obj_t);
-	    fprintf(fp, "Invalid value for ");
-	    method_call_1(obj, consts.str.printc, outf);
-	    fprintf(fp, ": ");
-	    method_call_1(obj2, consts.str.printc, outf);
-	}
-	break;
-    case ERR_NUM_ARGS:
-	fprintf(fp, "Incorrect number of arguments");
-	break;
-    case ERR_BREAK:
-	fprintf(fp, "break not within while:");
-	break;
-    case ERR_CONT:
-	fprintf(fp, "continue not within while:");
-	break;
-    case ERR_RETURN:
-	fprintf(fp, "return not within block");
-	break;
-    default:
-	ASSERT(0);
-    }
-
-    fprintf(fp, "\n");
-    bt_print(outf);
-
-    va_end(ap);
-
-    --err_depth;
-
-    longjmp(jmp_buf_top, 1);
-}
-
 /***************************************************************************
 
 Object hiearchies
@@ -930,6 +936,7 @@ Known reference loops include:
 void
 meta_metaclass_walk(obj_t inst, void (*func)(obj_t))
 {
+    (*func)(inst_of(inst));
     (*func)(CLASS(inst)->name);
     (*func)(CLASS(inst)->parent);
     (*func)(CLASS(inst)->cl_methods);
@@ -3342,9 +3349,9 @@ inst_init_file(obj_t cl, obj_t inst, va_list ap)
     obj_t mode     = va_arg(ap, obj_t);
     FILE *fp       = va_arg(ap, FILE *);
 
-    _FILE(inst)->filename = filename;
-    _FILE(inst)->mode     = mode;
-    _FILE(inst)->fp       = fp;
+    OBJ_ASSIGN(_FILE(inst)->filename, filename);
+    OBJ_ASSIGN(_FILE(inst)->mode,     mode);
+    _FILE(inst)->fp = fp;
 
     inst_init_parent(cl, inst, ap);
 }
@@ -3369,8 +3376,8 @@ inst_free_file(obj_t cl, obj_t inst)
 void
 file_new(unsigned dst, obj_t filename, obj_t mode, FILE *fp)
 {
-    vm_inst_alloc(0, consts.cl.file);
-    inst_init(R0, filename, mode, fp);
+    vm_inst_alloc(dst, consts.cl.file);
+    inst_init(regs[dst], filename, mode, fp);
 }
 
 void
@@ -3385,6 +3392,8 @@ cm_file_new(unsigned argc)
     string_tocstr(2, mode);
 
     fp = fopen(STRING(R1)->data, STRING(R2)->data);
+
+    if (fp == 0)  error(ERR_FILE_OPEN, filename);
 
     vm_popm(1, 2);
 
@@ -3976,7 +3985,11 @@ env_init(void)
 {
     unsigned i;
 
-    root_add(&consts.hdr, (sizeof(consts) - sizeof(consts.hdr)) / sizeof(obj_t));
+    /* Initialization must be done in several steps, because of references
+       between objects.
+    */
+
+    /* Step 1.  Set up Metaclass */
 
     OBJ_ASSIGN(consts.cl.metaclass, (obj_t) zcmalloc(sizeof(struct inst_metaclass)));
     list_insert(&consts.cl.metaclass->list_node, LIST_END(OBJ_LIST_ACTIVE));
@@ -3984,6 +3997,10 @@ env_init(void)
     CLASS(consts.cl.metaclass)->inst_init = inst_init_parent;
     CLASS(consts.cl.metaclass)->inst_walk = inst_walk_metaclass;
     CLASS(consts.cl.metaclass)->inst_free = inst_free_parent;
+
+    /* Step 2.  Init all information for classes that does not depend on other
+       classes */
+
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         vm_inst_alloc(0, consts.cl.metaclass);
         obj_assign(init_cl_tbl[i].pcl, R0);
@@ -3993,12 +4010,18 @@ env_init(void)
         CLASS(*init_cl_tbl[i].pcl)->inst_free = init_cl_tbl[i].inst_free;
     }
 
+    /* Step 3.  Fix up Metaclass */
+
+    OBJ_ASSIGN(consts.cl.metaclass->inst_of, consts.cl.object);
+
+    /* Step 4.  Fix up parents for all classes */
+
     OBJ_ASSIGN(CLASS(consts.cl.metaclass)->parent, consts.cl.object);
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         if (init_cl_tbl[i].pparent)  OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->parent, *init_cl_tbl[i].pparent);
     }
 
-    OBJ_ASSIGN(consts.cl.metaclass->inst_of, consts.cl.object);
+    /* Step 5.  Initialize all class dictionaries */
 
     string_dict_new(0, 16);
     OBJ_ASSIGN(CLASS(consts.cl.metaclass)->cl_methods, R0);
@@ -4019,11 +4042,22 @@ env_init(void)
         OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->inst_vars, R0);
     }
 
+    /* Step 6.  Initialize all strings */
+
     init_strs(init_str_tbl, ARRAY_SIZE(init_str_tbl));
+
+    /* Step 7.  Initialize all methods */
 
     init_cl_methods(init_cl_method_tbl, ARRAY_SIZE(init_cl_method_tbl));
     init_inst_methods(init_inst_method_tbl, ARRAY_SIZE(init_inst_method_tbl));
     init_inst_vars(init_inst_var_tbl, ARRAY_SIZE(init_inst_var_tbl));
+
+    /* Step 8.  Add all constants (classes and strings) to root set for
+       collection */
+
+    root_add(&consts.hdr, (sizeof(consts) - sizeof(consts.hdr)) / sizeof(obj_t));
+
+    /* Step 9.  Set up the top-level Environment */
 
     OBJ_ASSIGN(env, 0);
     env_push();
@@ -4104,18 +4138,9 @@ fini(void)
 }
 
 
-int
-main(void)
+void
+interactive(void)
 {
-#ifdef YYDEBUG
-    yydebug = 1;
-#endif
-#ifndef YY_FLEX_DEBUG
-    yy_flex_debug = 0;
-#endif
-    
-    init();
-
     setjmp(jmp_buf_top);
 
     yy_popall();
@@ -4135,6 +4160,43 @@ main(void)
         method_call_0(R1, consts.str.eval);
 	vm_assign(1, R0);
         method_call_0(R1, consts.str.print);
+    }
+}
+
+void
+file_run(char *filename)
+{
+    if (setjmp(jmp_buf_top) != 0) {
+	yy_popall();
+	while (sp < stack_end)  vm_drop();
+
+	return;
+    }
+
+    string_new(1, 1, strlen(filename), filename);
+    string_new(2, 1, 2,                "r+");
+    method_call_2(consts.cl.file, consts.str.newc_modec, R1, R2);
+
+    vm_assign(1, R0);
+    method_call_0(R1, consts.str.load);
+}
+
+int
+main(int argc, char **argv)
+{
+#ifdef YYDEBUG
+    yydebug = 1;
+#endif
+#ifndef YY_FLEX_DEBUG
+    yy_flex_debug = 0;
+#endif
+    
+    init();
+
+    if (argc == 1) {
+	interactive();
+    } else {
+	file_run(argv[1]);
     }
 
     fini();

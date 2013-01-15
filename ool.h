@@ -12,6 +12,9 @@ struct obj {
     struct list list_node;
     obj_t       inst_of;
     unsigned    ref_cnt;
+#ifdef DEBUG
+    unsigned    old_ref_cnt;
+#endif
 };
 
 struct inst_metaclass {

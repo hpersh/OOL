@@ -34,7 +34,7 @@ yy_pop(void)
 {
     struct yy_stack_entry *p;
 
-    yy_switch_to_buffer(yysp->yybs);
+   if (yysp->yybs)  yy_switch_to_buffer(yysp->yybs);
 
     p = yysp;
     yysp = yysp->prev;
