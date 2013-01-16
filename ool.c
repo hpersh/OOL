@@ -944,6 +944,9 @@ Known reference loops include:
 
 /* Metaclass itself */
 
+void
+_inst_walk_metaclass(obj_t inst, void (*func)(obj_t));
+
 /* Used when walking an object whose inst_of is NIL;
    see cl_inst_walk()
 */
@@ -951,12 +954,8 @@ void
 meta_metaclass_walk(obj_t inst, void (*func)(obj_t))
 {
     (*func)(inst_of(inst));
-    (*func)(CLASS(inst)->name);
-    (*func)(CLASS(inst)->parent);
-    (*func)(CLASS(inst)->cl_methods);
-    (*func)(CLASS(inst)->cl_vars);
-    (*func)(CLASS(inst)->inst_methods);
-    (*func)(CLASS(inst)->inst_vars);
+
+    _inst_walk_metaclass(inst, func);
 }
 
 /* Installed as a class method of Metaclass */
@@ -1296,7 +1295,7 @@ cm_object_return(unsigned argc)
 /* Class: Metaclass */
 
 void
-inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
+_inst_walk_metaclass(obj_t inst, void (*func)(obj_t))
 {
     (*func)(CLASS(inst)->name);
     (*func)(CLASS(inst)->parent);
@@ -1304,6 +1303,12 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
     (*func)(CLASS(inst)->cl_vars);
     (*func)(CLASS(inst)->inst_methods);
     (*func)(CLASS(inst)->inst_vars);
+}
+
+void
+inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
+{
+    _inst_walk_metaclass(inst, func);
 
     inst_walk_parent(cl, inst, func);
 }
@@ -1322,12 +1327,7 @@ cm_metaclass_name(unsigned argc)
 void
 cm_metaclass_tostring(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR;
-
-    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                              error(ERR_NUM_ARGS);
-
-    vm_assign(0, CLASS(recvr)->name);
+    cm_metaclass_name(argc);
 }
 
 void
@@ -1376,18 +1376,21 @@ obj_t env_new(obj_t, obj_t);
 void
 cm_metaclass_new(unsigned argc)
 {
-    obj_t    recvr = MC_FRAME_RECVR, p;
+    obj_t    recvr = MC_FRAME_RECVR, parent, inst_vars;
     unsigned inst_size;
 
     if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
     if (argc != 3)                     error(ERR_NUM_ARGS);
+    parent = MC_FRAME_ARG_1;
+    if (inst_of(parent) != consts.cl.metaclass)  error(ERR_INVALID_ARG, parent);
+    inst_vars = MC_FRAME_ARG_2;
+    if (inst_of(inst_vars) != consts.cl.list)  error(ERR_INVALID_ARG, inst_vars);
 
     vm_push(1);
 
     vm_inst_alloc(0, consts.cl.metaclass);
     OBJ_ASSIGN(CLASS(R0)->name,   MC_FRAME_ARG_0);
-    OBJ_ASSIGN(CLASS(R0)->parent, MC_FRAME_ARG_1);
-    env_new(CLASS(R0)->name, R0);
+    OBJ_ASSIGN(CLASS(R0)->parent, parent);
     string_dict_new(1, 16);
     OBJ_ASSIGN(CLASS(R0)->cl_methods, R1);
     string_dict_new(1, 16);
@@ -1396,17 +1399,19 @@ cm_metaclass_new(unsigned argc)
     OBJ_ASSIGN(CLASS(R0)->inst_methods, R1);
     string_dict_new(1, 16);
     OBJ_ASSIGN(CLASS(R0)->inst_vars, R1);
-    for (inst_size = CLASS(CLASS(R0)->parent)->inst_size, p = MC_FRAME_ARG_2;
-         p;
-         p = CDR(p), inst_size += sizeof(obj_t)
+    for (inst_size = CLASS(CLASS(R0)->parent)->inst_size;
+         inst_vars;
+         inst_vars = CDR(inst_vars), inst_size += sizeof(obj_t)
          ) {
         integer_new(1, inst_size);
-        dict_at_put(CLASS(R0)->inst_vars, CAR(p), R1);
+        dict_at_put(CLASS(R0)->inst_vars, CAR(inst_vars), R1);
     }
     CLASS(R0)->inst_size = inst_size;
     CLASS(R0)->inst_init = inst_init_parent;
     CLASS(R0)->inst_walk = inst_walk_user;
     CLASS(R0)->inst_free = inst_free_parent;
+
+    env_new(CLASS(R0)->name, R0);
 
     vm_pop(1);
 }
@@ -1541,9 +1546,10 @@ cm_boolean_equals(unsigned argc)
     if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
     if (argc != 1)                            error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
 
-    boolean_new(0, BOOLEAN(recvr)->val == BOOLEAN(arg)->val);
+    boolean_new(0, inst_of(arg) == consts.cl.boolean
+		   && BOOLEAN(recvr)->val == BOOLEAN(arg)->val
+		);
 }
 
 void
@@ -1639,19 +1645,27 @@ cm_integer_new(unsigned argc)
 void
 cm_integer_tostring(unsigned argc)
 {
-    char buf[32];
+    obj_t recvr = MC_FRAME_RECVR;
+    char  buf[32];
 
-    string_new(0, 1, snprintf(buf, sizeof(buf), "%lld", INTEGER(MC_FRAME_RECVR)->val), buf);
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    string_new(0, 1, snprintf(buf, sizeof(buf), "%lld", INTEGER(recvr)->val), buf);
 }
 
 void
 cm_integer_tostring_base(unsigned argc)
 {
-    obj_t     recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
-    long long val = INTEGER(recvr)->val, base;
+    obj_t     recvr = MC_FRAME_RECVR, arg;
+    long long val, base;
     char      buf[32], *p;
     unsigned  n;
 
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    val = INTEGER(recvr)->val;
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
     if (inst_of(arg) != consts.cl.integer)  error(ERR_INVALID_ARG, arg);
     base = INTEGER(arg)->val;
     if (base <= 0 || base > 36)  error(ERR_INVALID_ARG, arg);
@@ -1706,7 +1720,12 @@ cm_integer_equals(unsigned argc)
 void
 cm_integer_minus(unsigned argc)
 {
-    integer_new(0, -INTEGER(MC_FRAME_RECVR)->val);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    integer_new(0, -INTEGER(recvr)->val);
 }
 
 void
@@ -1725,25 +1744,53 @@ cm_integer_add(unsigned argc)
 void
 cm_integer_sub(unsigned argc)
 {
-    integer_new(0, INTEGER(MC_FRAME_RECVR)->val - INTEGER(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+
+    integer_new(0, INTEGER(recvr)->val - INTEGER(arg)->val);
 }
 
 void
 cm_integer_mult(unsigned argc)
 {
-    integer_new(0, INTEGER(MC_FRAME_RECVR)->val * INTEGER(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+
+    integer_new(0, INTEGER(recvr)->val * INTEGER(arg)->val);
 }
 
 void
 cm_integer_div(unsigned argc)
 {
-    integer_new(0, INTEGER(MC_FRAME_RECVR)->val / INTEGER(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+
+    integer_new(0, INTEGER(recvr)->val / INTEGER(arg)->val);
 }
 
 void
 cm_integer_mod(unsigned argc)
 {
-    integer_new(0, INTEGER(MC_FRAME_RECVR)->val % INTEGER(MC_FRAME_ARG_0)->val);
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+
+    integer_new(0, INTEGER(recvr)->val % INTEGER(arg)->val);
 }
 
 void
@@ -1768,37 +1815,52 @@ integer_range(long long init, long long lim, long long step)
 void
 cm_integer_range(unsigned argc)
 {
-    integer_range(0, INTEGER(MC_FRAME_RECVR)->val, 1);
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+
+    integer_range(0, INTEGER(recvr)->val, 1);
 }
 
 void
 cm_integer_range_init(unsigned argc)
 {
-    obj_t arg = MC_FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(arg) != consts.cl.integer)  error(ERR_INVALID_ARG, arg);
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
 
-    integer_range(INTEGER(arg)->val, INTEGER(MC_FRAME_RECVR)->val, 1);
+    integer_range(INTEGER(arg)->val, INTEGER(recvr)->val, 1);
 }
 
 void
 cm_integer_range_init_step(unsigned argc)
 {
-    obj_t arg0 = MC_FRAME_ARG_0, arg1 = MC_FRAME_ARG_1;
+    obj_t recvr = MC_FRAME_RECVR, arg0, arg1;
 
-    if (inst_of(arg0) != consts.cl.integer)  error(ERR_INVALID_ARG, arg0);
-    if (inst_of(arg1) != consts.cl.integer)  error(ERR_INVALID_ARG, arg1);
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 2)                            error(ERR_NUM_ARGS);
+    arg0 = MC_FRAME_ARG_0;
+    if (inst_of(arg0) != consts.cl.integer)   error(ERR_INVALID_ARG, arg0);
+    arg1 = MC_FRAME_ARG_1;
+    if (inst_of(arg1) != consts.cl.integer)   error(ERR_INVALID_ARG, arg1);
 
-    integer_range(INTEGER(arg0)->val, INTEGER(MC_FRAME_RECVR)->val, INTEGER(arg1)->val);
+    integer_range(INTEGER(arg0)->val, INTEGER(recvr)->val, INTEGER(arg1)->val);
 }
 
 void
 cm_integer_chr(unsigned argc)
 {
     obj_t     recvr = MC_FRAME_RECVR;
-    long long val = INTEGER(recvr)->val;
-    char c;
+    long long val;
+    char      c;
 
+    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                            error(ERR_NUM_ARGS);
+    val = INTEGER(recvr)->val;
     if (val < 0 || val > 127)  error(ERR_INVALID_ARG, recvr);
 
     c = val;
