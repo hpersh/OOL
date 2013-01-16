@@ -823,21 +823,20 @@ method_call(unsigned argc)
     }
 
     cl = inst_of(recvr);
-#if 0
-    if (cl == NIL || cl == consts.cl.metaclass) {
-#endif
     if (recvr == consts.cl.metaclass || cl == consts.cl.metaclass) {
-        for (cl = recvr; cl; cl = CLASS(cl)->parent) {
-            obj_t obj;
+	obj_t obj;
+	
+	cl = recvr;
 
-            if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
-		if (sel_with_colon) {
-		    OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
-		}
-		vm_assign(0, CDR(obj));
-		goto done;
+	if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
+	    if (sel_with_colon) {
+		OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
 	    }
+	    vm_assign(0, CDR(obj));
+	    goto done;
+	}
 
+        for ( ; cl; cl = CLASS(cl)->parent) {
             if (obj = dict_at(CLASS(cl)->cl_methods, sel)) {
                 method_run(cl, CDR(obj), argc);
                 goto done;
@@ -1175,111 +1174,121 @@ cm_object_append(unsigned argc)
     vm_assign(0, arg);
 }
 
-enum {
-    WB_BREAK = 1,
-    WB_CONT,
-    WB_RETURN
+
+enum jf_action {
+    JF_ACTION_NONE,
+    JF_ACTION_BREAK,
+    JF_ACTION_CONT,
+    JF_ACTION_RETURN
 };
 
-struct wb_frame {
-    struct wb_frame *prev;
+struct jmp_frame {
+    struct jmp_frame *prev;
 
-    enum {
-	WBF_TYPE_WHILE,
-	WBF_TYPE_BLOCK
+    enum jf_type {
+	JF_TYPE_WHILE,
+	JF_TYPE_BLOCK
     } type;
 
     jmp_buf jmp_buf;
-} *wbfp;
+} *jfp;
+
+#define JF_BEGIN(t)				\
+    {						\
+	struct jmp_frame __jf[1];		\
+	struct mc_frame  *__mcfp_save;		\
+	obj_t            *__sp_save;		\
+	int              jf_action;		\
+						\
+	__jf->prev = jfp;			\
+	jfp = __jf;				\
+	jfp->type = (t);			\
+						\
+	__mcfp_save = mcfp;				\
+	__sp_save   = sp;				\
+							\
+	if ((jf_action = setjmp(jfp->jmp_buf)) != 0) {	\
+	    mcfp = __mcfp_save;				\
+	    while (sp < __sp_save)  vm_drop();		\
+	}
+
+#define JF_END						\
+        jfp = jfp->prev;				\
+    }
+
+void
+jf_jmp(enum jf_type type, enum jf_action action)
+{
+    struct jmp_frame *p;
+
+    for (p = jfp; p; p = p->prev) {
+	if (p->type == type)  longjmp(p->jmp_buf, action);
+    }
+}
 
 void
 cm_object_while(unsigned argc)
 {
-    obj_t           recvr = MC_FRAME_RECVR, arg;
-    struct wb_frame wbf[1];
-    obj_t           *sp_save;
-    struct mc_frame *mcfp_save;
-    int             rc;
+    obj_t recvr = MC_FRAME_RECVR, arg;
 
     if (argc != 1)  error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
 
-    wbf->prev = wbfp;
-    wbfp = wbf;
-    wbfp->type = WBF_TYPE_WHILE;
-
-    mcfp_save = mcfp;
-    sp_save   = sp;
-    
-    if ((rc = setjmp(wbfp->jmp_buf)) != 0) {
-	mcfp = mcfp_save;
-	while (sp < sp_save)  vm_drop();
-
-	switch (rc) {
-	case WB_CONT:
+    JF_BEGIN(JF_TYPE_WHILE) {
+	switch (jf_action) {
+	case JF_ACTION_NONE:
+	case JF_ACTION_CONT:
 	    break;
-	case WB_BREAK:
+	case JF_ACTION_BREAK:
 	    goto done;
 	default:
 	    ASSERT(0);
 	}
-    }
-
-    for (;;) {
-	method_call_0(recvr, consts.str.eval);
-	if (inst_of(R0) != consts.cl.boolean)  error(ERR_INVALID_VALUE, recvr, R0);
-	if (!BOOLEAN(R0)->val)  break;
-	method_call_0(arg, consts.str.eval);
-    }
-
- done:
-    wbfp = wbfp->prev;
+	
+	for (;;) {
+	    method_call_0(recvr, consts.str.eval);
+	    if (inst_of(R0) != consts.cl.boolean)  error(ERR_INVALID_VALUE, recvr, R0);
+	    if (!BOOLEAN(R0)->val)  break;
+	    method_call_0(arg, consts.str.eval);
+	}
+	
+    done:
+	;
+    } JF_END;
 }
 
 void
 cm_object_break(unsigned argc)
 {
-    struct wb_frame *p;
-
     if (argc != 0)  error(ERR_NUM_ARGS);
-    for (p = wbfp; p; p = p->prev) {
-	if (p->type == WBF_TYPE_WHILE)  break;
-    }
-    if (p == 0)  error(ERR_BREAK);
 
     vm_assign(0, MC_FRAME_RECVR);
 
-    longjmp(p->jmp_buf, WB_BREAK);
+    jf_jmp(JF_TYPE_WHILE, JF_ACTION_BREAK);
+
+    error(ERR_BREAK);
 }
 
 void
 cm_object_cont(unsigned argc)
 {
-    struct wb_frame *p;
-
     if (argc != 0)  error(ERR_NUM_ARGS);
-    for (p = wbfp; p; p = p->prev) {
-	if (p->type == WBF_TYPE_WHILE)  break;
-    }
-    if (p == 0)  error(ERR_CONT);
 
-    longjmp(p->jmp_buf, WB_CONT);
+    jf_jmp(JF_TYPE_WHILE, JF_ACTION_CONT);
+
+    error(ERR_CONT);
 }
 
 void
 cm_object_return(unsigned argc)
 {
-    struct wb_frame *p;
-
     if (argc != 0)  error(ERR_NUM_ARGS);
-    for (p = wbfp; p; p = p->prev) {
-	if (p->type == WBF_TYPE_BLOCK)  break;
-    }
-    if (p == 0)  error(ERR_RETURN);
 
     vm_assign(0, MC_FRAME_RECVR);
 
-    longjmp(p->jmp_buf, WB_RETURN);
+    jf_jmp(JF_TYPE_BLOCK, JF_ACTION_RETURN);
+
+    error(ERR_RETURN);
 }
 
 /***************************************************************************/
@@ -2840,11 +2849,7 @@ void env_push(void), env_pop(void);
 void
 cm_block_eval(unsigned argc)
 {
-    obj_t           p, q;
-    struct wb_frame wbf[1];
-    obj_t           *sp_save;
-    struct mc_frame *mcfp_save;
-    int             rc;
+    obj_t p, q;
     
     env_push();
     
@@ -2852,31 +2857,25 @@ cm_block_eval(unsigned argc)
         env_new(CAR(p), CAR(q));
     }
 
-    wbf->prev = wbfp;
-    wbfp = wbf;
-    wbfp->type = WBF_TYPE_BLOCK;
-
-    mcfp_save = mcfp;
-    sp_save   = sp;
-    
-    if ((rc = setjmp(wbfp->jmp_buf)) != 0) {
-	mcfp = mcfp_save;
-	while (sp < sp_save)  vm_drop();
-
-	switch (rc) {
-	case WB_RETURN:
+    JF_BEGIN(JF_TYPE_BLOCK) {
+	switch (jf_action) {
+	case JF_ACTION_NONE:
+	    break;
+	case JF_ACTION_RETURN:
 	    goto done;
 	default:
 	    ASSERT(0);
 	}
-    }
+	
+	vm_assign(0, NIL);
+	for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
+	    method_call_0(CAR(p), consts.str.eval);
+	}
+	
+    done:
+	;
+    } JF_END;
 
-    vm_assign(0, NIL);
-    for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
-        method_call_0(CAR(p), consts.str.eval);
-    }
-
- done:
     env_pop();
 }
 
@@ -4177,7 +4176,7 @@ interactive(void)
     yy_popall();
     while (sp < stack_end)  vm_drop();
     mcfp = 0;
-    wbfp  = 0;
+    jfp  = 0;
 
     for (;;) {
         printf("\nok ");
