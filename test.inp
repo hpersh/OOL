@@ -8,8 +8,8 @@
 #Object  // Test tostring, print
 
 // Test #Metaclass
-[#System assert: [[#Integer name] equals: "#Integer"]]  // Test name
-[#System assert: [[#Integer parent] equals: #Object]]  // Test parent
+[#System assert: [[#Integer #name] equals: "#Integer"]]  // Test name
+[#System assert: [[#Integer #parent] equals: #Object]]  // Test parent
 [#Metaclass new: "Test" parent: #Object instance-variables: '(a b c)]  // Test sublclassing
 [Test instance-variables]  // Test instance-variables
 [#Environment delete: "Test"]
