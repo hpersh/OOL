@@ -59,7 +59,7 @@ const struct init_method math_init_inst_method_tbl[] = {
 __attribute__((constructor))
 void math_init(void)
 {
-    VM_ASSIGN(math_consts.module, R0);
+    OBJ_ASSIGN(math_consts.module, R0);
 
     init_strs((const struct init_str *) &math_init_str_tbl, ARRAY_SIZE(math_init_str_tbl));
 

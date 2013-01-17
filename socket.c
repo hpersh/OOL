@@ -39,14 +39,14 @@ inst_init_socket(obj_t cl, obj_t inst, va_list ap)
     int fd = va_arg(ap, int);
 
     SOCKET(inst)->fd = fd;
-    cl_inst_init(CLASS(cl)->parent, inst, ap);
+    inst_init_parent(cl, inst, ap);
 }
 
 void
 inst_free_socket(obj_t cl, obj_t inst)
 {
     close(SOCKET(inst)->fd);
-    cl_inst_free(CLASS(cl)->parent, inst);
+    inst_free_parent(cl, inst);
 }
 
 void
@@ -67,7 +67,7 @@ cm_socket_bind(unsigned argc)
     struct sockaddr_in sockaddr;
     int rc;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     string_tocstr(1, ipaddr);
 
@@ -79,9 +79,9 @@ cm_socket_bind(unsigned argc)
 
     ASSERT(rc == 0);
 
-    VM_POP(R1);
+    vm_pop(1);
 
-    VM_ASSIGN(R0, recvr);
+    vm_assign(0, recvr);
 }
 
 void
@@ -91,7 +91,7 @@ cm_socket_connect(unsigned argc)
     struct sockaddr_in sockaddr;
     int rc;
 
-    VM_PUSH(R1);
+    vm_push(1);
 
     string_tocstr(1, ipaddr);
 
@@ -103,9 +103,9 @@ cm_socket_connect(unsigned argc)
 
     ASSERT(rc == 0);
 
-    VM_POP(R1);
+    vm_pop(1);
 
-    VM_ASSIGN(R0, recvr);
+    vm_assign(0, recvr);
 }
 
 void
@@ -118,7 +118,7 @@ cm_socket_send(unsigned argc)
 
     ASSERT(rc >= 0);
 
-    VM_ASSIGN(R0, recvr);
+    vm_assign(0, recvr);
 }
 
 void
@@ -127,7 +127,7 @@ cm_socket_recv(unsigned argc)
     obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0;
     int   n, rc;
 
-    VM_PUSHM(R1, 2);
+    vm_pushm(1, 2);
 
     vm_inst_alloc(1, consts.cl.string);
     inst_init(R1, n = INTEGER(arg)->val);
@@ -137,10 +137,9 @@ cm_socket_recv(unsigned argc)
 
     ASSERT(rc >= 0);
 
-    integer_new(2, rc);
-    cons(0, consts.cl.pair, R2, R1);
+    string_new(0, 1, rc, STRING(R1)->data);
 
-    VM_POPM(R1, 2);
+    vm_popm(1, 2);
 }
 
 const struct init_str socket_init_str_tbl[] = {
@@ -157,7 +156,7 @@ const struct init_cl socket_init_cl_tbl[] = {
       &socket_consts.str.Socket,
       sizeof(struct inst_socket),
       inst_init_socket,
-      inst_walk_passthru,
+      inst_walk_parent,
       inst_free_socket
     }
 };
@@ -176,7 +175,7 @@ const struct init_method socket_init_inst_method_tbl[] = {
 __attribute__((constructor))
 void socket_init(void)
 {
-    VM_ASSIGN(socket_consts.module, R0);
+    OBJ_ASSIGN(socket_consts.module, R0);
 
     init_strs((const struct init_str *) &socket_init_str_tbl, ARRAY_SIZE(socket_init_str_tbl));
 

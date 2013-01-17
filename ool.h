@@ -124,6 +124,8 @@ obj_t regs[8];
 #define R6   (regs[6])
 #define R7   (regs[7])
 
+void obj_assign(obj_t *dst, obj_t obj);
+#define OBJ_ASSIGN(dst, src)  (obj_assign(&(dst), (src)))
 obj_t obj_retain(obj_t);
 void  obj_release(obj_t);
 
@@ -137,9 +139,9 @@ void vm_popm(unsigned dst, unsigned n);
 void vm_drop(void);
 void vm_dropn(unsigned n);
 
-void inst_init_passthru(obj_t cl, obj_t inst, va_list ap);
-void inst_walk_passthru(obj_t cl, obj_t inst, void (*func)(obj_t));
-void inst_free_passthru(obj_t cl, obj_t inst);
+void inst_init_parent(obj_t cl, obj_t inst, va_list ap);
+void inst_walk_parent(obj_t cl, obj_t inst, void (*func)(obj_t));
+void inst_free_parent(obj_t cl, obj_t inst);
 
 void cl_inst_init(obj_t cl, obj_t inst, va_list ap);
 void cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t));
