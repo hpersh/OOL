@@ -2073,16 +2073,26 @@ string_tocstr(unsigned dst, obj_t s)
 unsigned
 string_hash(obj_t s)
 {
-    unsigned result, n;
+#define POLY 0xEDB88320
+
+    unsigned crc, n, k;
     char     *p;
-    
+
     ASSERT(inst_of(s) == consts.cl.string);
 
-    for (result = 0, p = STRING(s)->data, n = STRING(s)->size; n; --n, ++p) {
-        result += *p;
+    for (crc = 0xffffffff, p = STRING(s)->data, n = STRING(s)->size; n; --n, ++p) {
+	crc ^= *p;
+	
+	for (k = 8; k; --k) {
+	    if (crc & 1) {
+		crc = (crc >> 1) ^ POLY;
+	    } else {
+		crc >>= 1;
+	    }
+	}
     }
 
-    return (result);
+    return (crc);
 }
 
 void
