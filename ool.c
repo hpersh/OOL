@@ -646,6 +646,7 @@ enum errcode {
     ERR_CONT,
     ERR_RETURN,
     ERR_FILE_OPEN,
+    ERR_CONST,
     ERR_OVF
 };
 
@@ -750,6 +751,9 @@ error(enum errcode errcode, ...)
 	obj = va_arg(ap, obj_t);
 	method_call_1(obj, consts.str.printc, outf);
 	break;
+    case ERR_CONST:
+	fprintf(fp, "Attempt to write constant");
+	break;
     case ERR_OVF:
 	fprintf(fp, "Arithmetic overflow");
 	break;
@@ -834,6 +838,8 @@ method_call(unsigned argc)
 
 	    if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
 		if (sel_with_colon) {
+		    if (STRING(R1)->data[0] == '#')  error(ERR_CONST);
+
 		    OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
 		}
 		vm_assign(0, CDR(obj));
@@ -854,6 +860,8 @@ method_call(unsigned argc)
             obj_t *p = (obj_t *)((char *) recvr + INTEGER(CDR(obj))->val);
 
             if (sel_with_colon) {
+		if (STRING(R1)->data[0] == '#')  error(ERR_CONST);
+
                 obj_assign(p, MC_FRAME_ARG_0);
             }
             vm_assign(0, *p);
@@ -3131,11 +3139,24 @@ cm_dict_at(unsigned argc)
 }
 
 void
+dict_const_chk(obj_t key)
+{
+    if (inst_of(key) == consts.cl.string
+	&& STRING(key)->size > 0
+	&& STRING(key)->data[0] == '#'
+	) {
+	error(ERR_CONST);
+    }
+}
+
+void
 dict_at_put(obj_t dict, obj_t key, obj_t val)
 {
     obj_t p, *bucket;
 
     if (p = dict_find(dict, key, &bucket)) {
+	dict_const_chk(key);
+
         OBJ_ASSIGN(CDR(p), val);
     } else {
         vm_pushm(1, 2);
@@ -3293,7 +3314,7 @@ cm_env_new(unsigned argc)
 }
 
 void
-cm_env_new_val(unsigned argc)
+cm_env_new_put(unsigned argc)
 {
     vm_assign(0, env_new(MC_FRAME_ARG_0, MC_FRAME_ARG_1));
 }
@@ -3330,6 +3351,8 @@ env_at_put(obj_t s, obj_t val)
     obj_t p;
 
     if (p = env_find(s)) {
+	dict_const_chk(s);
+
         OBJ_ASSIGN(CDR(p), val);
     } else {
         dict_at_put(CAR(env), s, val);
@@ -3728,7 +3751,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.Array,       "#Array" },
     { &consts.str.Block,       "#Block" },
     { &consts.str.Boolean,     "#Boolean" },
-    { &consts.str.Code_Method, "#Code_Method" },    
+    { &consts.str.Code_Method, "#Code-Method" },    
     { &consts.str.Dictionary,  "#Dictionary" },
     { &consts.str.Dptr,        "#Dptr" },
     { &consts.str.Environment, "#Environment" },
@@ -3783,18 +3806,19 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.ltc,         "lt:" },
     { &consts.str.mapc,        "map:" },
     { &consts.str.minus,       "minus" },
+    { &consts.str.mode,        "#mode" },
     { &consts.str.modc,        "mod:" },
     { &consts.str.multc,       "mult:" },
-    { &consts.str.name,        "name" },
+    { &consts.str.name,        "#name" },
     { &consts.str.new,         "new" },
     { &consts.str.newc,        "new:" },
     { &consts.str.newc_modec,  "new:mode:" },
     { &consts.str.newc_parentc_instance_variablesc, "new:parent:instance-variables:" },
-    { &consts.str.newc_valuec, "new:value:" },
+    { &consts.str.newc_putc,   "new:put:" },
     { &consts.str.nil,         "#nil" },
     { &consts.str.not,         "not" },
     { &consts.str.orc,         "or:" },
-    { &consts.str.parent,      "parent" },
+    { &consts.str.parent,      "#parent" },
     { &consts.str.pop,         "pop" },
     { &consts.str.pquote,      "pquote" },
     { &consts.str.print,       "print" },
@@ -3855,7 +3879,7 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.env,         &consts.str.push,     cm_env_push },
     { &consts.cl.env,         &consts.str.pop,      cm_env_pop },
     { &consts.cl.env,         &consts.str.newc,     cm_env_new },
-    { &consts.cl.env,         &consts.str.newc_valuec, cm_env_new_val },
+    { &consts.cl.env,         &consts.str.newc_putc, cm_env_new_put },
     { &consts.cl.env,         &consts.str.atc,      cm_env_at },
     { &consts.cl.env,         &consts.str.atc_putc, cm_env_at_put },
     { &consts.cl.env,         &consts.str.deletec,  cm_env_del }
@@ -3977,6 +4001,8 @@ const struct init_inst_var init_inst_var_tbl[] = {
     { &consts.cl.metaclass, &consts.str.class_methods,    sizeof(struct obj) + 2 * sizeof(obj_t) },
     { &consts.cl.metaclass, &consts.str.class_variables,  sizeof(struct obj) + 3 * sizeof(obj_t) },
     { &consts.cl.metaclass, &consts.str.instance_methods, sizeof(struct obj) + 4 * sizeof(obj_t) },
+    { &consts.cl.file,      &consts.str.name,             sizeof(struct obj) },
+    { &consts.cl.file,      &consts.str.mode,             sizeof(struct obj) + 1 * sizeof(obj_t) }
 };
 
 

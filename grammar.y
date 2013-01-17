@@ -276,7 +276,7 @@ method_call:
     vm_pushm(1, 2);
 
     cons(1, consts.cl.list, $4, NIL);
-    string_new(2, 1, 6, "value:");
+    string_new(2, 1, 4, "put:");
     cons(1, consts.cl.list, R2, R1);
     cons(2, consts.cl.list, consts.str.quote, NIL);
     cons(2, consts.cl.list, $2, R2);
@@ -314,6 +314,19 @@ method_call:
     $$ = R0;
 }
         | TOK_LSQBR expr sym TOK_RSQBR
+{
+    vm_pushm(1, 2);
+    
+    cons(2, consts.cl.list, $3, NIL);
+    cons(1, consts.cl.list, $2, R2);
+    method_call_new(0, R1);
+
+    vm_popm(1, 2);
+
+    vm_push(0);
+    $$ = R0;
+}
+        | TOK_LSQBR expr csym TOK_RSQBR
 {
     vm_pushm(1, 2);
     

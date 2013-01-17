@@ -100,7 +100,7 @@
 [#System assert: [foo equals: 99]]  // Test access to older env
 [#Environment at: 'foo put: 66]
 [#System assert: [foo equals: 66]]  // Test access to older env
-[#Environment new: 'foo value: 101]
+[#Environment new: 'foo put: 101]
 [#System assert: [foo equals: 101]]  // Test new env
 [#Environment pop]
 [#System assert: [foo equals: 66]]  // Test revert to older env

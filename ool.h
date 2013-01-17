@@ -263,13 +263,14 @@ struct consts {
         obj_t mapc;
 	obj_t minus;
 	obj_t modc;
+	obj_t mode;
         obj_t multc;
         obj_t name;
         obj_t new;
         obj_t newc;
 	obj_t newc_modec;
 	obj_t newc_parentc_instance_variablesc;
-        obj_t newc_valuec;
+        obj_t newc_putc;
         obj_t nil;
         obj_t not;
 	obj_t orc;
