@@ -824,28 +824,31 @@ method_call(unsigned argc)
 
     cl = inst_of(recvr);
     if (recvr == consts.cl.metaclass || cl == consts.cl.metaclass) {
-	obj_t obj;
-	
-	cl = recvr;
+        for (cl = recvr; cl; cl = CLASS(cl)->parent) {
+	    obj_t obj;
 
-	if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
-	    if (sel_with_colon) {
-		OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
-	    }
-	    vm_assign(0, CDR(obj));
-	    goto done;
-	}
-
-        for ( ; cl; cl = CLASS(cl)->parent) {
             if (obj = dict_at(CLASS(cl)->cl_methods, sel)) {
                 method_run(cl, CDR(obj), argc);
                 goto done;
             }
+
+	    if (argc <= 1 && (obj = dict_at(CLASS(cl)->cl_vars, R1))) {
+		if (sel_with_colon) {
+		    OBJ_ASSIGN(CDR(obj), MC_FRAME_ARG_0);
+		}
+		vm_assign(0, CDR(obj));
+		goto done;
+	    }
         }
     }
 
     for (cl = inst_of(recvr); cl; cl = CLASS(cl)->parent) {
         obj_t obj;
+
+        if (obj = dict_at(CLASS(cl)->inst_methods, sel)) {
+            method_run(cl, CDR(obj), argc);
+            goto done;
+        }
 
         if (argc <= 1 && (obj = dict_at(CLASS(cl)->inst_vars, R1))) {
             obj_t *p = (obj_t *)((char *) recvr + INTEGER(CDR(obj))->val);
@@ -854,11 +857,6 @@ method_call(unsigned argc)
                 obj_assign(p, MC_FRAME_ARG_0);
             }
             vm_assign(0, *p);
-            goto done;
-        }
-
-        if (obj = dict_at(CLASS(cl)->inst_methods, sel)) {
-            method_run(cl, CDR(obj), argc);
             goto done;
         }
     }
