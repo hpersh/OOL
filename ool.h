@@ -285,7 +285,7 @@ struct consts {
         obj_t rangec;
 	obj_t rangec_stepc;
         obj_t readc;
-        obj_t readlnc;
+        obj_t readln;
 	obj_t reducec_initc;
 	obj_t _return;
 	obj_t rindexc;

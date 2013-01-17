@@ -526,12 +526,16 @@ collect(void)
 void
 vm_assign(unsigned dst, obj_t val)
 {
+    ASSERT(dst < ARRAY_SIZE(regs));
+
     OBJ_ASSIGN(regs[dst], val);
 }
 
 void
 vm_inst_alloc(unsigned dst, obj_t cl)
 {
+    ASSERT(dst < ARRAY_SIZE(regs));
+
     vm_assign(dst, obj_alloc(cl));
 }
 
@@ -570,6 +574,8 @@ vm_pushl(obj_t obj)
 void
 vm_push(unsigned src)
 {
+    ASSERT(src < ARRAY_SIZE(regs));
+
     vm_pushl(regs[src]);
 }
 
@@ -577,6 +583,8 @@ void
 vm_pushm(unsigned src, unsigned n)
 {
     obj_t *p;
+
+    ASSERT((src + n) <= ARRAY_SIZE(regs));
 
     VM_STACK_CHK_DN(n);
 
@@ -588,6 +596,8 @@ vm_pushm(unsigned src, unsigned n)
 void
 vm_pop(unsigned dst)
 {
+    ASSERT(dst < ARRAY_SIZE(regs));
+
     VM_STACK_CHK_UP(1);
 
     VM_STATS_UPDATE_POP(1);
@@ -599,6 +609,8 @@ void
 vm_popm(unsigned dst, unsigned n)
 {
     obj_t *p;
+
+    ASSERT((dst + n) <= ARRAY_SIZE(regs));
 
     VM_STACK_CHK_UP(n);
 
@@ -1867,7 +1879,7 @@ cm_integer_chr(unsigned argc)
     if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
     if (argc != 0)                            error(ERR_NUM_ARGS);
     val = INTEGER(recvr)->val;
-    if (val < 0 || val > 127)  error(ERR_INVALID_ARG, recvr);
+    if (val < 0 || val > 255)  error(ERR_INVALID_ARG, recvr);
 
     c = val;
     string_new(0, 1, 1, &c);
@@ -2178,7 +2190,7 @@ string_print(obj_t s, FILE *fp)
         if (isprint(c) || isspace(c)) {
             putc(c, fp);
         } else {
-            fprintf(fp, "\\x%02x", c);
+            fprintf(fp, "\\x%02x", * (unsigned char *) p);
         }
     }
 }
@@ -3541,11 +3553,10 @@ file_read(FILE *fp, unsigned len, unsigned linef)
     char     *p;
     unsigned i;
 
-    vm_pushm(1, 2);
+    vm_push(1);
 
     vm_inst_alloc(1, consts.cl.string);
     inst_init(R1, len);
-    memset(STRING(R1)->data, 0, len);
 
     for (i = 0, p = STRING(R1)->data; len; --len, ++p, ++i) {
 	int c = fgetc(fp);
@@ -3554,22 +3565,69 @@ file_read(FILE *fp, unsigned len, unsigned linef)
 
 	*p = c;
     }
-    integer_new(2, i);
-    cons(0, consts.cl.pair, R2, R1);
 
-    vm_popm(1, 2);
+    string_new(0, 1, i, STRING(R1)->data);
+
+    vm_pop(1);
 }
 
 void
 cm_file_read(unsigned argc)
 {
-    file_read(_FILE(MC_FRAME_RECVR)->fp, INTEGER(MC_FRAME_ARG_0)->val, 0);
+    FILE      *fp = _FILE(MC_FRAME_RECVR)->fp;
+    long long len = INTEGER(MC_FRAME_ARG_0)->val;
+    char      *p;
+    unsigned  i;
+
+    vm_push(1);
+
+    vm_inst_alloc(1, consts.cl.string);
+    inst_init(R1, len);
+
+    for (i = 0, p = STRING(R1)->data; len; --len, ++p, ++i) {
+	int c = fgetc(fp);
+
+	if (c == EOF)  break;
+
+	*p = c;
+    }
+
+    string_new(0, 1, i, STRING(R1)->data);
+
+    vm_pop(1);
 }
 
 void
 cm_file_readln(unsigned argc)
 {
-    file_read(_FILE(MC_FRAME_RECVR)->fp, INTEGER(MC_FRAME_ARG_0)->val, 1);
+    FILE      *fp = _FILE(MC_FRAME_RECVR)->fp;
+    char      *p;
+    unsigned  i;
+
+    vm_pushm(1, 2);
+
+    vm_inst_alloc(1, consts.cl.string);
+    inst_init(R1, 32);
+
+    for (i = 0, p = STRING(R1)->data; ; ++p, ++i) {
+	int c = fgetc(fp);
+
+	if (c == EOF || c == '\n')  break;
+	
+	if (i >= STRING(R1)->size) {
+	    vm_inst_alloc(2, consts.cl.string);
+	    inst_init(R2, STRING(R1)->size << 1);
+	    memcpy(STRING(R2)->data, STRING(R1)->data, i);
+	    vm_assign(1, R2);
+	    p = STRING(R1)->data + i;
+	}
+
+	*p = c;
+    }
+
+    string_new(0, 1, i, STRING(R1)->data);
+
+    vm_popm(1, 2);
 }
 
 /***************************************************************************/
@@ -3839,7 +3897,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.rangec,      "range:" },
     { &consts.str.rangec_stepc, "range:step:" },
     { &consts.str.readc,       "read:" },
-    { &consts.str.readlnc,     "readln:" },
+    { &consts.str.readln,      "readln" },
     { &consts.str.reducec_initc, "reduce:init:" },
     { &consts.str._return,     "return" },
     { &consts.str.rindexc,     "rindex:" },
@@ -4003,7 +4061,7 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.dict,        &consts.str.keys,       cm_dict_keys },
     { &consts.cl.dict,        &consts.str.tostring,   cm_dict_tostring },
     { &consts.cl.file,        &consts.str.readc,      cm_file_read },
-    { &consts.cl.file,        &consts.str.readlnc,    cm_file_readln },
+    { &consts.cl.file,        &consts.str.readln,     cm_file_readln },
     { &consts.cl.file,        &consts.str.load,       cm_file_load }
 };
 
