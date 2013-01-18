@@ -122,6 +122,22 @@ inst_of(obj_t obj)
     return (obj ? obj->inst_of : consts.cl.object);
 }
 
+unsigned
+is_subclass_of(obj_t cl1, obj_t cl2)
+{
+    for ( ; cl1; cl1 = CLASS(cl1)->parent) {
+	if (cl1 == cl2)  return (1);
+    }
+
+    return (0);
+}
+
+unsigned
+is_kind_of(obj_t obj, obj_t cl)
+{
+    return (is_subclass_of(inst_of(obj), cl));
+}
+
 void
 cl_inst_init(obj_t cl, obj_t inst, va_list ap)
 {
@@ -648,6 +664,7 @@ void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
 /***************************************************************************/
 
 enum errcode {
+    ERR_ASSERT,
     ERR_SYM_NOT_BOUND,
     ERR_NO_METHOD,
     ERR_INVALID_METHOD,
@@ -699,7 +716,7 @@ error(enum errcode errcode, ...)
     ++err_depth;
 
     method_call_0(consts.cl.file, consts.str._stderr);
-    if (inst_of(R0) != consts.cl.file) {
+    if (!is_kind_of(R0, consts.cl.file)) {
 	fatal(FATAL_ERR_BAD_ERR_STREAM);
     }
     fp = _FILE(outf = R0)->fp;
@@ -714,6 +731,9 @@ error(enum errcode errcode, ...)
     va_start(ap, errcode);
     
     switch (errcode) {
+    case ERR_ASSERT:
+	fprintf(fp, "Assertion failed");
+	break;
     case ERR_SYM_NOT_BOUND:
 	fprintf(fp, "Symbol not bound: ");
 	obj = va_arg(ap, obj_t);
@@ -759,9 +779,15 @@ error(enum errcode errcode, ...)
 	fprintf(fp, "return not within block");
 	break;
     case ERR_FILE_OPEN:
-	fprintf(fp, "Could not open file ");
-	obj = va_arg(ap, obj_t);
-	method_call_1(obj, consts.str.printc, outf);
+	{
+	    int errnum;
+	    
+	    obj    = va_arg(ap, obj_t);
+	    errnum = va_arg(ap, int);
+	    fprintf(fp, "File open failed - %s ", strerror(errnum));
+	    method_call_1(obj, consts.str.printc, outf);
+	}
+	
 	break;
     case ERR_CONST:
 	fprintf(fp, "Attempt to write constant");
@@ -808,13 +834,13 @@ method_run(obj_t cl, obj_t func, unsigned argc)
 {
     mcfp->cl = cl;
 
-    if (inst_of(func) == consts.cl.code_method) {
+    if (is_kind_of(func, consts.cl.code_method)) {
         (* CODE_METHOD(func)->func)(argc);
         
         return;
     }
 
-    if (inst_of(func) == consts.cl.block) {
+    if (is_kind_of(func, consts.cl.block)) {
         method_call_1(func, consts.str.evalc, MC_FRAME_ARGS);
 
         return;
@@ -930,6 +956,34 @@ method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2)
     } MC_FRAME_END;
     vm_dropn(2);
 }
+
+/***************************************************************************/
+
+#define CRC32_INIT(crc)  ((crc) = 0xffffffff)
+
+void
+crc32(unsigned *pcrc, unsigned char *p, unsigned n)
+{
+#define CRC_POLY 0xEDB88320
+
+    unsigned crc, k;
+
+    for (crc = *pcrc; n; --n, ++p) {
+	crc ^= *p;
+	
+	for (k = 8; k; --k) {
+	    if (crc & 1) {
+		crc = (crc >> 1) ^ CRC_POLY;
+	    } else {
+		crc >>= 1;
+	    }
+	}
+    }
+
+    *pcrc = crc;
+}
+
+#define CRC32(r, p, n)  (crc32(&(r), (unsigned char *)(p), (n)))
 
 /***************************************************************************
 
@@ -1183,10 +1237,10 @@ cm_object_append(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (recvr != NIL)                    error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                       error(ERR_NUM_ARGS);
+    if (recvr != NIL)                      error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                         error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.list)  error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.list))  error(ERR_INVALID_ARG, arg);
 
     vm_assign(0, arg);
 }
@@ -1264,7 +1318,7 @@ cm_object_while(unsigned argc)
 	
 	for (;;) {
 	    method_call_0(recvr, consts.str.eval);
-	    if (inst_of(R0) != consts.cl.boolean)  error(ERR_INVALID_VALUE, recvr, R0);
+	    if (!is_kind_of(R0, consts.cl.boolean))  error(ERR_INVALID_VALUE, recvr, R0);
 	    if (!BOOLEAN(R0)->val)  break;
 	    method_call_0(arg, consts.str.eval);
 	}
@@ -1336,8 +1390,8 @@ cm_metaclass_name(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                              error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.metaclass))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                                error(ERR_NUM_ARGS);
 
     vm_assign(0, CLASS(recvr)->name);
 }
@@ -1353,8 +1407,8 @@ cm_metaclass_parent(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                              error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.metaclass))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                                error(ERR_NUM_ARGS);
 
     vm_assign(0, CLASS(recvr)->parent);
 }
@@ -1366,8 +1420,8 @@ cm_metaclass_inst_vars(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                              error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.metaclass))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                                error(ERR_NUM_ARGS);
 
     dict_keys(CLASS(recvr)->inst_vars);
 }
@@ -1400,9 +1454,9 @@ cm_metaclass_new(unsigned argc)
     if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
     if (argc != 3)                     error(ERR_NUM_ARGS);
     parent = MC_FRAME_ARG_1;
-    if (inst_of(parent) != consts.cl.metaclass)  error(ERR_INVALID_ARG, parent);
+    if (!is_kind_of(parent, consts.cl.metaclass))  error(ERR_INVALID_ARG, parent);
     inst_vars = MC_FRAME_ARG_2;
-    if (inst_of(inst_vars) != consts.cl.list)  error(ERR_INVALID_ARG, inst_vars);
+    if (!is_kind_of(inst_vars, consts.cl.list))    error(ERR_INVALID_ARG, inst_vars);
 
     vm_push(1);
 
@@ -1461,10 +1515,10 @@ cm_code_method_eval(unsigned argc)
     obj_t    recvr = MC_FRAME_RECVR, args;
     unsigned nargs;
 
-    if (inst_of(recvr) != consts.cl.code_method)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                                error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.code_method))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                                  error(ERR_NUM_ARGS);
     args = MC_FRAME_ARG_0;
-    if (inst_of(args) != consts.cl.list)  error(ERR_INVALID_ARG, args);
+    if (!is_kind_of(args, consts.cl.list))  error(ERR_INVALID_ARG, args);
     nargs = list_len(args);
     if (nargs < 1)  error(ERR_NUM_ARGS);
 
@@ -1500,10 +1554,10 @@ cm_boolean_and(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.boolean))    error(ERR_INVALID_ARG, arg);
 
     boolean_new(0, BOOLEAN(recvr)->val && BOOLEAN(arg)->val);
 }
@@ -1513,10 +1567,10 @@ cm_boolean_or(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.boolean))    error(ERR_INVALID_ARG, arg);
 
     boolean_new(0, BOOLEAN(recvr)->val || BOOLEAN(arg)->val);
 }
@@ -1526,10 +1580,10 @@ cm_boolean_xor(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.boolean)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.boolean))    error(ERR_INVALID_ARG, arg);
 
     boolean_new(0, BOOLEAN(recvr)->val ^ BOOLEAN(arg)->val);
 }
@@ -1539,8 +1593,8 @@ cm_boolean_not(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
     boolean_new(0, !BOOLEAN(recvr)->val);
 }
@@ -1550,8 +1604,8 @@ cm_boolean_tostring(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
     vm_assign(0, BOOLEAN(recvr)->val ? consts.str._true : consts.str._false);
 }
@@ -1561,11 +1615,11 @@ cm_boolean_equals(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
 
-    boolean_new(0, inst_of(arg) == consts.cl.boolean
+    boolean_new(0, inst_of(arg) == inst_of(recvr)
 		   && BOOLEAN(recvr)->val == BOOLEAN(arg)->val
 		);
 }
@@ -1575,8 +1629,8 @@ cm_boolean_if(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
 
     if (BOOLEAN(recvr)->val) {
 	method_call_0(MC_FRAME_ARG_0, consts.str.eval);
@@ -1590,10 +1644,23 @@ cm_boolean_if_else(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.boolean)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 2)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 2)                              error(ERR_NUM_ARGS);
 
     method_call_0(BOOLEAN(recvr)->val ? MC_FRAME_ARG_0 : MC_FRAME_ARG_1, consts.str.eval);
+}
+
+void
+cm_boolean_assert(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR;
+
+    if (!is_kind_of(recvr, consts.cl.boolean))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
+
+    if (BOOLEAN(recvr)->val == 0)  error(ERR_ASSERT);
+
+    vm_assign(0, recvr);
 }
 
 /***************************************************************************/
@@ -1627,17 +1694,17 @@ cm_integer_new(unsigned argc)
 
     arg = MC_FRAME_ARG_0;
     
-    if (inst_of(arg) == consts.cl.integer) {
+    if (is_kind_of(arg, consts.cl.integer)) {
         integer_new(0, INTEGER(arg)->val);
         return;
     }
 
-    if (inst_of(arg) == consts.cl._float) {
+    if (is_kind_of(arg, consts.cl._float)) {
         integer_new(0, (long long) FLOAT(arg)->val);
         return;
     }
 
-    if (inst_of(arg) == consts.cl.string) {
+    if (is_kind_of(arg, consts.cl.string)) {
         long long val = 0;
         char      *fmt;
 
@@ -1666,8 +1733,8 @@ cm_integer_tostring(unsigned argc)
     obj_t recvr = MC_FRAME_RECVR;
     char  buf[32];
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
     string_new(0, 1, snprintf(buf, sizeof(buf), "%lld", INTEGER(recvr)->val), buf);
 }
@@ -1680,11 +1747,11 @@ cm_integer_tostring_base(unsigned argc)
     char      buf[32], *p;
     unsigned  n;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
     val = INTEGER(recvr)->val;
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)  error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
     base = INTEGER(arg)->val;
     if (base <= 0 || base > 36)  error(ERR_INVALID_ARG, arg);
 
@@ -1712,12 +1779,16 @@ cm_integer_tostring_base(unsigned argc)
 void
 cm_integer_hash(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR;
+    obj_t    recvr = MC_FRAME_RECVR;
+    unsigned r;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
-    vm_assign(0, recvr);
+    CRC32_INIT(r);
+    CRC32(r, &INTEGER(recvr)->val, sizeof(INTEGER(recvr)->val));
+
+    integer_new(0, r);
 }
 
 void
@@ -1725,12 +1796,12 @@ cm_integer_equals(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
-		inst_of(arg) == consts.cl.integer
+		inst_of(arg) == inst_of(recvr)
 		&& INTEGER(recvr)->val == INTEGER(arg)->val
 		);
 }
@@ -1740,8 +1811,8 @@ cm_integer_minus(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
     integer_new(0, -INTEGER(recvr)->val);
 }
@@ -1751,10 +1822,10 @@ cm_integer_add(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_new(0, INTEGER(recvr)->val + INTEGER(arg)->val);
 }
@@ -1764,10 +1835,10 @@ cm_integer_sub(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_new(0, INTEGER(recvr)->val - INTEGER(arg)->val);
 }
@@ -1777,10 +1848,10 @@ cm_integer_mult(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_new(0, INTEGER(recvr)->val * INTEGER(arg)->val);
 }
@@ -1790,10 +1861,10 @@ cm_integer_div(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_new(0, INTEGER(recvr)->val / INTEGER(arg)->val);
 }
@@ -1803,10 +1874,10 @@ cm_integer_mod(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_new(0, INTEGER(recvr)->val % INTEGER(arg)->val);
 }
@@ -1835,8 +1906,8 @@ cm_integer_range(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
 
     integer_range(0, INTEGER(recvr)->val, 1);
 }
@@ -1846,10 +1917,10 @@ cm_integer_range_init(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 1)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
-    if (inst_of(arg) != consts.cl.integer)    error(ERR_INVALID_ARG, arg);
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
     integer_range(INTEGER(arg)->val, INTEGER(recvr)->val, 1);
 }
@@ -1859,12 +1930,12 @@ cm_integer_range_init_step(unsigned argc)
 {
     obj_t recvr = MC_FRAME_RECVR, arg0, arg1;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 2)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 2)                              error(ERR_NUM_ARGS);
     arg0 = MC_FRAME_ARG_0;
-    if (inst_of(arg0) != consts.cl.integer)   error(ERR_INVALID_ARG, arg0);
+    if (!is_kind_of(arg0, consts.cl.integer))   error(ERR_INVALID_ARG, arg0);
     arg1 = MC_FRAME_ARG_1;
-    if (inst_of(arg1) != consts.cl.integer)   error(ERR_INVALID_ARG, arg1);
+    if (!is_kind_of(arg1, consts.cl.integer))   error(ERR_INVALID_ARG, arg1);
 
     integer_range(INTEGER(arg0)->val, INTEGER(recvr)->val, INTEGER(arg1)->val);
 }
@@ -1876,8 +1947,8 @@ cm_integer_chr(unsigned argc)
     long long val;
     char      c;
 
-    if (inst_of(recvr) != consts.cl.integer)  error(ERR_INVALID_ARG, recvr);
-    if (argc != 0)                            error(ERR_NUM_ARGS);
+    if (!is_kind_of(recvr, consts.cl.integer))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                              error(ERR_NUM_ARGS);
     val = INTEGER(recvr)->val;
     if (val < 0 || val > 255)  error(ERR_INVALID_ARG, recvr);
 
@@ -1940,17 +2011,17 @@ cm_float_new(unsigned argc)
 
     arg = MC_FRAME_ARG_0;
     
-    if (inst_of(arg) == consts.cl._float) {
+    if (is_kind_of(arg, consts.cl._float)) {
         float_new(0, FLOAT(arg)->val);
         return;
     }
 
-    if (inst_of(arg) == consts.cl.integer) {
+    if (is_kind_of(arg, consts.cl.integer)) {
         float_new(0, (long double) INTEGER(arg)->val);
         return;
     }
 
-    if (inst_of(arg) == consts.cl.string) {
+    if (is_kind_of(arg, consts.cl.string)) {
         long double val = 0.0;
 
         string_tocstr(0, arg);
@@ -1996,17 +2067,30 @@ cm_float_minus(unsigned argc)
 void
 cm_float_hash(unsigned argc)
 {
-    integer_new(0, (long long) FLOAT(MC_FRAME_RECVR)->val);
+    obj_t    recvr = MC_FRAME_RECVR;
+    unsigned r;
+
+    if (!is_kind_of(recvr, consts.cl._float))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 0)                             error(ERR_NUM_ARGS);
+
+    CRC32_INIT(r);
+    CRC32(r, &FLOAT(recvr)->val, sizeof(FLOAT(recvr)->val));
+
+    integer_new(0, r);
 }
 
 void
 cm_float_equals(unsigned argc)
 {
-    obj_t arg = MC_FRAME_ARG_0;
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (!is_kind_of(recvr, consts.cl._float))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                             error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
 
     boolean_new(0,
-		inst_of(arg) == consts.cl._float
-		&& FLOAT(MC_FRAME_RECVR)->val == FLOAT(arg)->val
+		inst_of(arg) == inst_of(recvr)
+		&& FLOAT(recvr)->val == FLOAT(arg)->val
 		);
 }
 
@@ -2085,26 +2169,14 @@ string_tocstr(unsigned dst, obj_t s)
 unsigned
 string_hash(obj_t s)
 {
-#define POLY 0xEDB88320
-
-    unsigned crc, n, k;
-    char     *p;
+    unsigned r;
 
     ASSERT(inst_of(s) == consts.cl.string);
 
-    for (crc = 0xffffffff, p = STRING(s)->data, n = STRING(s)->size; n; --n, ++p) {
-	crc ^= *p;
-	
-	for (k = 8; k; --k) {
-	    if (crc & 1) {
-		crc = (crc >> 1) ^ POLY;
-	    } else {
-		crc >>= 1;
-	    }
-	}
-    }
+    CRC32_INIT(r);
+    CRC32(r, STRING(s)->data, STRING(s)->size);
 
-    return (crc);
+    return (r);
 }
 
 void
@@ -3043,6 +3115,13 @@ cm_array_new(unsigned argc)
 void
 cm_array_at(unsigned argc)
 {
+    obj_t recvr = MC_FRAME_RECVR, arg;
+
+    if (!is_kind_of(recvr, consts.cl.array))    error(ERR_INVALID_ARG, recvr);
+    if (argc != 1)                              error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (!is_kind_of(arg, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
+
     vm_assign(0, ARRAY(MC_FRAME_RECVR)->data[INTEGER(MC_FRAME_ARG_0)->val]);
 }
 
@@ -3442,16 +3521,6 @@ cm_system_debug(unsigned argc)
 }
 
 void
-cm_system_assert(unsigned argc)
-{
-    obj_t arg = MC_FRAME_ARG_0;
-
-    assert(inst_of(arg) == consts.cl.boolean && BOOLEAN(arg)->val != 0);
-
-    vm_assign(0, arg);
-}
-
-void
 cm_system_collect(unsigned argc)
 {
     collect();
@@ -3528,7 +3597,7 @@ cm_file_new(unsigned argc)
 
     fp = fopen(STRING(R1)->data, STRING(R2)->data);
 
-    if (fp == 0)  error(ERR_FILE_OPEN, filename);
+    if (fp == 0)  error(ERR_FILE_OPEN, filename, errno);
 
     vm_popm(1, 2);
 
@@ -3915,7 +3984,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.xorc,        "xor:" }
 #ifdef DEBUG
     ,
-    { &consts.str.assertc,     "assert:" },
+    { &consts.str.assert,      "assert" },
     { &consts.str.collect,     "collect" },
     { &consts.str.debugc,      "debug:" }
 #endif
@@ -3953,7 +4022,6 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.env,         &consts.str.deletec,  cm_env_del }
 #ifdef DEBUG
     ,
-    { &consts.cl.system,      &consts.str.assertc,  cm_system_assert },
     { &consts.cl.system,      &consts.str.collect,  cm_system_collect },
     { &consts.cl.system,      &consts.str.debugc,   cm_system_debug }
 #endif
@@ -4063,6 +4131,10 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.file,        &consts.str.readc,      cm_file_read },
     { &consts.cl.file,        &consts.str.readln,     cm_file_readln },
     { &consts.cl.file,        &consts.str.load,       cm_file_load }
+#ifdef DEBUG
+    ,
+    { &consts.cl.boolean,     &consts.str.assert,     cm_boolean_assert }
+#endif
 };
 
 const struct init_inst_var init_inst_var_tbl[] = {

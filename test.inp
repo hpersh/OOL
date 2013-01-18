@@ -3,110 +3,107 @@
 [#System debug: 3]  // Turn on debugging
 
 // Test #Object
-[#System assert: ['sam equals: "sam"]]  // Test quoting
-[#System assert: [['sam instance-of] equals: #String]]  // Test instance-of, equals:
+[['sam equals: "sam"]                 assert]  // Test quoting
+[[['sam instance-of] equals: #String] assert]  // Test instance-of, equals:
 #Object  // Test tostring, print
 
 // Test #Metaclass
-[#System assert: [[#Integer #name] equals: "#Integer"]]  // Test name
-[#System assert: [[#Integer #parent] equals: #Object]]  // Test parent
+[[[#Integer #name] equals: "#Integer"] assert]  // Test name
+[[[#Integer #parent] equals: #Object]  assert]  // Test parent
 [#Metaclass new: "Test" parent: #Object instance-variables: '(a b c)]  // Test sublclassing
 [Test instance-variables]  // Test instance-variables
 [#Environment delete: "Test"]
 
 // Test #Code_Method
-[#System assert: [[[[[#Integer instance-methods] at: "add:"] cdr] eval: (1 2)] equals: 3]]  // Test eval
+[[[[[[#Integer instance-methods] at: "add:"] cdr] eval: (1 2)] equals: 3] assert]  // Test eval
 
 // Test #Boolean
-[#System assert: [[[1 equals: 1] tostring] equals: "#true"]]  // Test tostring
-[#System assert: [[#true if: '"foo" else: '"bar"] equals: "foo"]]  // Test if
-[#System assert: [[[1 equals: 2] if: '"foo" else: '"bar"] equals: "bar"]]  // Test if
+[[[[1 equals: 1] tostring] equals: "#true"]              assert]  // Test tostring
+[[[#true if: '"foo" else: '"bar"] equals: "foo"]         assert]  // Test if
+[[[[1 equals: 2] if: '"foo" else: '"bar"] equals: "bar"] assert]  // Test if
 
 // Test #Integer
-[#System assert: [[#Integer new] equals: 0]]  // Test new
-[#System assert: [[#Integer new: 13] equals: 13]]  // Test new
-[#System assert: [[#Integer new: 12.34] equals: 12]]  // Test new
-[#System assert: [[#Integer new: "13"] equals: 13]]  // Test new
-[#System assert: [[#Integer new: "0x13"] equals: 19]]  // Test new
-[#System assert: [[123 tostring] equals: "123"]]  // Test tostring
-[#System assert: [[123 tostring: 16] equals: "7B"]]  // Test tostring:
-[#System assert: [[123 hash] equals: 123]]  // Test hash
-[#System assert: [123 equals: 123]]  // Test equals
-[#System assert: [[13 add: 42] equals: 55]]  // Test add
-[#System assert: [[13 sub: 42] equals: -29]]  // Test sub
-[#System assert: [[3 mult: 4] equals: 12]]  // Test mult
-[#System assert: [[144 div: 12] equals: 12]]  // Test div
-[#System assert: [[147 mod: 12] equals: 3]]  // Test mod
-[#System assert: [[[[[[10 range] cdr] cdr] cdr] car] equals: 3]]  // Test range
-[#System assert: [[123 minus] equals: -123]]  // Test minus
+[[[#Integer new] equals: 0]                     assert]  // Test new
+[[[#Integer new: 13] equals: 13]                assert]  // Test new
+[[[#Integer new: 12.34] equals: 12]             assert]  // Test new
+[[[#Integer new: "13"] equals: 13]              assert]  // Test new
+[[[#Integer new: "0x13"] equals: 19]            assert]  // Test new
+[[[123 tostring] equals: "123"]                 assert]  // Test tostring
+[[[123 tostring: 16] equals: "7B"]              assert]  // Test tostring:
+[[[123 hash] equals: [123 hash]]                assert]  // Test hash
+[[123 equals: 123]                              assert]  // Test equals
+[[[13 add: 42] equals: 55]                      assert]  // Test add
+[[[13 sub: 42] equals: -29]                     assert]  // Test sub
+[[[3 mult: 4] equals: 12]                       assert]  // Test mult
+[[[144 div: 12] equals: 12]                     assert]  // Test div
+[[[147 mod: 12] equals: 3]                      assert]  // Test mod
+[[[[[[[10 range] cdr] cdr] cdr] car] equals: 3] assert]  // Test range
+[[[123 minus] equals: -123]                     assert]  // Test minus
 
 // Test #Float
-[#System assert: [[#Float new] equals: 0.0]]  // Test new
-[#System assert: [[#Float new: 12] equals: 12.0]]  // Test new
-[#System assert: [[#Float new: 12.34] equals: 12.34]]  // Test new
-[#System assert: [[#Float new: "12.34"] equals: 12.34]]  // Test new
-[#System assert: [[12.34 tostring] equals: "12.34"]]  // Test tostring
-[#System assert: [[12.34 hash] equals: 12]]  // Test hash
-[#System assert: [12.34 equals: 12.34]]  // Test equals
-[#System assert: [[12.0 add: 0.34] equals: 12.34]]  // Test add
-[#System assert: [[12.34 sub: 0.34] equals: 12.0]]  // Test sub
-[#System assert: [[1.5 mult: 4.0] equals: 6.0]]  // Test mult
-[#System assert: [[6.0 div: 4.0] equals: 1.5]]  // Test div
-[#System assert: [[12.34 minus] equals: -12.34]]  // Test minus
+[[[#Float new] equals: 0.0]            assert]  // Test new
+[[[#Float new: 12] equals: 12.0]       assert]  // Test new
+[[[#Float new: 12.34] equals: 12.34]   assert]  // Test new
+[[[#Float new: "12.34"] equals: 12.34] assert]  // Test new
+[[[12.34 tostring] equals: "12.34"]    assert]  // Test tostring
+[[[12.34 hash] equals: [12.34 hash]]   assert]  // Test hash
+[[12.34 equals: 12.34]                 assert]  // Test equals
+[[[12.0 add: 0.34] equals: 12.34]      assert]  // Test add
+[[[12.34 sub: 0.34] equals: 12.0]      assert]  // Test sub
+[[[1.5 mult: 4.0] equals: 6.0]         assert]  // Test mult
+[[[6.0 div: 4.0] equals: 1.5]          assert]  // Test div
+[[[12.34 minus] equals: -12.34]        assert]  // Test minus
 
 // Test #String
 'sam  // Test quoting
 "The rain in Spain"  // Test quoting
 "A\nB\nC"  // Test quoting
-[#System assert: [[["foo" hash] instance-of] equals: #Integer]]  // Test hash
-[#System assert: ["foo" equals: 'foo]]  // Test equals
-[#System assert: [["foo" append: "bar"] equals: "foobar"]]  // Test append
+[[[["foo" hash] instance-of] equals: #Integer] assert]  // Test hash
+[["foo" equals: 'foo]                          assert]  // Test equals
+[[["foo" append: "bar"] equals: "foobar"]      assert]  // Test append
 [#Environment at: "foo" put: 42]
-[#System assert: [foo equals: 42]]  // Test eval
+[[foo equals: 42]                              assert]  // Test eval
 
 // Test #List
 (1 2)  // Test parsing, cons, printing
 '(1, 2)  // Test parsing, cons, printing
-[#System assert: [['(1 2) car] equals: 1]]  // Test car
-[#System assert: [['(1, 2) cdr] equals: 2]]  // Test cdr
-[#System assert: [[([1 add: 1] [2 add: 3]) car] equals: 2]]  // Test eval
-[#System assert: [[[((1 2)) map: {(u v) [u add: v]}] car] equals: 3]]  // Test map
-[#System assert: [[[(12) foreach: {(u) [u add: u]}] car] equals: 24]]  // Test foreach
+[[['(1 2) car] equals: 1]                            assert]  // Test car
+[[['(1, 2) cdr] equals: 2]                           assert]  // Test cdr
+[[[([1 add: 1] [2 add: 3]) car] equals: 2]           assert]  // Test eval
+[[[[((1 2)) map: {(u v) [u add: v]}] car] equals: 3] assert]  // Test map
+[[[[(12) foreach: {(u) [u add: u]}] car] equals: 24] assert]  // Test foreach
 
 // Test #Method_Call
 // Used lots before...
-[#System assert: [['[1 add: 2] eval] equals: 3]]  // Test eval
+[[['[1 add: 2] eval] equals: 3] assert]  // Test eval
 '[1 add: 2]  // Test tostring
 
 // Test #Block
-[#System assert: [[{(x) [x mult: x]} eval: (3)] equals: 9]]  // Test eval
+[[[{(x) [x mult: x]} eval: (3)] equals: 9] assert]  // Test eval
 {(x) [x mult: x]}  // Test tostring
 
 // Test #Dictionary
 [#Environment at: 'd put: [#Dictionary new]]  // Test new
 [d at: "foo" put: 123]  // Test at:put:
-[#System assert: [[[d at: "foo"] cdr] equals: 123]]  // Test at
-[#System assert: [[[d keys] car] equals: "foo"]]  // Test keys
-[#System assert: [[d tostring] equals: "((foo, 123))"]]
+[[[[d at: "foo"] cdr] equals: 123] assert]  // Test at
+[[[[d keys] car] equals: "foo"]    assert]  // Test keys
+[[[d tostring] equals: "((foo, 123))"] assert]
 [d delete: "foo"]  // Test delete
-[#System assert: [[d at: "foo"] equals: #nil]]  // Test delete
+[[[d at: "foo"] equals: #nil] assert]  // Test delete
 
 // Test #Environment
 [#Environment at: 'foo put: 77]
-[#System assert: [foo equals: 77]]  // Test at:put:
+[[foo equals: 77] assert]  // Test at:put:
 [foo = [66 add: 33]]  // Test assign shorthand
-[#System assert: [foo equals: 99]]
+[[foo equals: 99] assert]
 [#Environment push]
-[#System assert: [foo equals: 99]]  // Test access to older env
+[[foo equals: 99] assert]  // Test access to older env
 [#Environment at: 'foo put: 66]
-[#System assert: [foo equals: 66]]  // Test access to older env
+[[foo equals: 66] assert]  // Test access to older env
 [#Environment new: 'foo put: 101]
-[#System assert: [foo equals: 101]]  // Test new env
+[[foo equals: 101] assert]  // Test new env
 [#Environment pop]
-[#System assert: [foo equals: 66]]  // Test revert to older env
-
-// Test #System
-[#System assert: [[#System shell: "ls"] equals: 0]]
+[[foo equals: 66] assert]  // Test revert to older env
 
 // Test #File
 [#File new: "test.inp" mode: "r+"]  // Test new

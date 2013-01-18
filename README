@@ -10,6 +10,7 @@
 - infinite-range integers
 - cleaner root-set interface for modules
 - module name hierarchy
+  - a.b.c.d => [[[[#Environment at: 'a] at: 'b] at: 'c] at: 'd]
 - complete methods
 - complete error checking in methods
 - get rid of class constants, replace with env lookups

@@ -306,7 +306,7 @@ struct consts {
 	obj_t xorc;
         
 #ifdef DEBUG
-        obj_t assertc;
+        obj_t assert;
         obj_t collect;
         obj_t debugc;
 #endif
