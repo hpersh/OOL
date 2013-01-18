@@ -277,11 +277,9 @@ struct consts {
         obj_t not;
 	obj_t orc;
         obj_t parent;
-        obj_t pop;
 	obj_t pquote;
         obj_t print;
         obj_t printc;
-        obj_t push;
         obj_t quote;
         obj_t range;
         obj_t rangec;
@@ -291,7 +289,6 @@ struct consts {
 	obj_t reducec_initc;
 	obj_t _return;
 	obj_t rindexc;
-        obj_t shellc;
 	obj_t splicec;
 	obj_t splitc;
 	obj_t _stderr;

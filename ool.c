@@ -3384,22 +3384,6 @@ env_pop(void)
     OBJ_ASSIGN(env, CDR(env));
 }
 
-void
-cm_env_push(unsigned argc)
-{
-    env_push();
-    
-    vm_assign(0, NIL);
-}
-
-void
-cm_env_pop(unsigned argc)
-{
-    env_pop();
-
-    vm_assign(0, NIL);
-}
-
 obj_t
 env_new(obj_t s, obj_t val)
 {
@@ -3493,14 +3477,6 @@ cm_env_del(unsigned argc)
 /***************************************************************************/
 
 /* Class: System */
-
-void
-cm_system_shell(unsigned argc)
-{
-    string_tocstr(0, MC_FRAME_ARG_0);
-
-    integer_new(0, (long long) system(STRING(R0)->data));
-}
 
 extern int yydebug, yy_flex_debug;
 
@@ -3956,11 +3932,9 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.not,         "not" },
     { &consts.str.orc,         "or:" },
     { &consts.str.parent,      "#parent" },
-    { &consts.str.pop,         "pop" },
     { &consts.str.pquote,      "pquote" },
     { &consts.str.print,       "print" },
     { &consts.str.printc,      "print:" },
-    { &consts.str.push,        "push" },
     { &consts.str.quote,       "quote" },
     { &consts.str.range,       "range" },
     { &consts.str.rangec,      "range:" },
@@ -3970,7 +3944,6 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.reducec_initc, "reduce:init:" },
     { &consts.str._return,     "return" },
     { &consts.str.rindexc,     "rindex:" },
-    { &consts.str.shellc,      "shell:" },
     { &consts.str._stderr,     "stderr" },
     { &consts.str._stdin,      "stdin" },
     { &consts.str._stdout,     "stdout" },
@@ -4010,11 +3983,8 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.dict,        &consts.str.new,      cm_dict_new },
     { &consts.cl.file,        &consts.str.newc_modec, cm_file_new },
     { &consts.cl.module,      &consts.str.newc,     cm_module_new },
-    { &consts.cl.system,      &consts.str.shellc,   cm_system_shell },
     { &consts.cl.system,      &consts.str.exit,     cm_system_exit },
     { &consts.cl.system,      &consts.str.exitc,    cm_system_exitc },
-    { &consts.cl.env,         &consts.str.push,     cm_env_push },
-    { &consts.cl.env,         &consts.str.pop,      cm_env_pop },
     { &consts.cl.env,         &consts.str.newc,     cm_env_new },
     { &consts.cl.env,         &consts.str.newc_putc, cm_env_new_put },
     { &consts.cl.env,         &consts.str.atc,      cm_env_at },
