@@ -94,21 +94,14 @@ EDQUOTE         "\\\""
 
 NDQUOTE         [^\"]
 
+SYM		{ALPHA}({ALPHA}|{DECDIGIT})*
+
+CSYM		"#"{SYM}
+
+DSYM		({SYM}|{CSYM})("."({SYM}|{CSYM}))+
+
+
 %%
-
-"-"?{DECDIGIT}+"."{DECDIGIT}+	{ return (TOK_FLOATNUM); }
-
-"-"?{DECDIGIT}+			{ return (TOK_DECNUM); }
-
-0[Xx]{HEXDIGIT}+		{ return (TOK_HEXNUM); }
-
-"#"{ALPHA}({ALPHA}|{DECDIGIT})*       { return (TOK_CSYM); }
-
-{ALPHA}({ALPHA}|{DECDIGIT})*          { return (TOK_SYM); }
-
-{DQUOTE}({EDQUOTE}|{NDQUOTE})*{DQUOTE}        { return (TOK_QSTR); }
-
-{ALPHA}({ALPHA}|{DECDIGIT})*":"       { return (TOK_SELN); }
 
 "'"     { return (TOK_QUOTE); }
 
@@ -142,6 +135,22 @@ NDQUOTE         [^\"]
 
 "\n"	{ if (yysp)  ++yysp->line; }
 
-[ \t\n\r]       /* Skip whitespace */
+"-"?{DECDIGIT}+"."{DECDIGIT}+	{ return (TOK_FLOATNUM); }
+
+"-"?{DECDIGIT}+			{ return (TOK_DECNUM); }
+
+0[Xx]{HEXDIGIT}+		{ return (TOK_HEXNUM); }
+
+{CSYM}				{ return (TOK_CSYM); }
+
+{SYM}				{ return (TOK_SYM); }
+
+{DSYM}				{ return (TOK_DSYM); }
+
+{DQUOTE}({EDQUOTE}|{NDQUOTE})*{DQUOTE}        { return (TOK_QSTR); }
+
+{ALPHA}({ALPHA}|{DECDIGIT})*":"       { return (TOK_SELN); }
+
+[ \t\r]       /* Skip whitespace */
 
 .               { fprintf(stderr, "Bad character (0x%02x) in input\n", yytext[0]); }

@@ -17,18 +17,23 @@ struct obj {
 #endif
 };
 
+typedef void (*inst_init_t)(obj_t cl, obj_t inst, va_list ap);
+typedef void (*inst_walk_t)(obj_t cl, obj_t inst, void (*func)(obj_t));
+typedef void (*inst_free_t)(obj_t cl, obj_t inst);
+
 struct inst_metaclass {
-    struct obj base;
-    obj_t      name;
-    obj_t      parent;
-    obj_t      cl_methods;
-    obj_t      cl_vars;
-    obj_t      inst_methods;
-    obj_t      inst_vars;
-    unsigned   inst_size;         /* Size of instance, in bytes */
-    void       (*inst_init)(obj_t cl, obj_t inst, va_list ap);
-    void       (*inst_walk)(obj_t cl, obj_t inst, void (*func)(obj_t));
-    void       (*inst_free)(obj_t cl, obj_t inst);
+    struct obj  base;
+    obj_t       name;
+    obj_t       parent;
+    obj_t       module;
+    obj_t       cl_methods;
+    obj_t       cl_vars;
+    obj_t       inst_methods;
+    obj_t       inst_vars;
+    unsigned    inst_size;         /* Size of instance, in bytes */
+    inst_init_t inst_init;
+    inst_walk_t inst_walk;
+    inst_free_t inst_free;
 };
 #define CLASS(obj)      ((struct inst_metaclass *)(obj))
 
@@ -107,12 +112,47 @@ struct inst_file {
 
 struct inst_module {
     struct obj base;
-    void       *ptr;
+    obj_t      name;
+    obj_t      parent;
+    obj_t      env;
+    obj_t      filename;	/* NIL <=> Main (top-level module) */
+    void       *ptr;		/* NIL <=> Not loaded from dynamic lib */
 };
 #define MODULE(obj)  ((struct inst_module *)(obj))
 
+enum fatal_errcode {
+    FATAL_ERR_NO_MEM,
+    FATAL_ERR_STACK_OVERFLOW,
+    FATAL_ERR_STACK_UNDERFLOW,
+    FATAL_ERR_DOUBLE_ERR,
+    FATAL_ERR_BAD_ERR_STREAM
+};
+
+void fatal(enum fatal_errcode errcode);
+
+enum errcode {
+    ERR_ASSERT,
+    ERR_SYM_NOT_BOUND,
+    ERR_NO_METHOD,
+    ERR_INVALID_METHOD,
+    ERR_INVALID_ARG,
+    ERR_INVALID_VALUE_1,
+    ERR_INVALID_VALUE_2,
+    ERR_NUM_ARGS,
+    ERR_BREAK,
+    ERR_CONT,
+    ERR_RETURN,
+    ERR_FILE_OPEN,
+    ERR_CONST,
+    ERR_MODULE_LOAD,
+    ERR_MODULE_MEMBER,
+    ERR_OVF
+};
+
+void error(enum errcode errcode, ...);
+
 obj_t *sp;
-obj_t env;
+obj_t module_main, module_cur;
 
 obj_t regs[8];
 #define R0   (regs[0])
@@ -151,6 +191,7 @@ void inst_init(obj_t recvr, ...);
 struct mc_frame {
     struct mc_frame *prev;
     obj_t           cl, sel, args;
+    obj_t           module_prev;
 } *mcfp;
 
 #define MC_FRAME_SEL       (mcfp->sel)
@@ -175,7 +216,16 @@ void method_call_new(unsigned dst, obj_t list);
 void block_new(unsigned dst, obj_t list);
 void array_new(unsigned dst, unsigned size);
 void _dict_new(unsigned dst, unsigned size, unsigned (*hash_func)(obj_t), unsigned (*equal_func)(obj_t, obj_t));
+void string_dict_new(unsigned dst, unsigned size);
 void dict_new(unsigned dst, unsigned size);
+void class_new(unsigned dst, obj_t name, obj_t parent, unsigned inst_size,
+	       inst_init_t _inst_init, inst_walk_t _inst_walk, inst_free_t _inst_free
+	       );
+
+obj_t env_at(obj_t s);
+obj_t env_new_put(obj_t s, obj_t val);
+void  env_at_put(obj_t s, obj_t val);
+void  env_del(obj_t s);
 
 struct root_hdr {
     struct root_hdr *next;
@@ -262,6 +312,7 @@ struct consts {
 	obj_t length;
 	obj_t load;
 	obj_t ltc;
+	obj_t main;
         obj_t mapc;
 	obj_t minus;
 	obj_t modc;
@@ -277,6 +328,7 @@ struct consts {
         obj_t not;
 	obj_t orc;
         obj_t parent;
+	obj_t path;
 	obj_t pquote;
         obj_t print;
         obj_t printc;

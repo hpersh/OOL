@@ -27,6 +27,7 @@ extern int  yyleng;
 %token TOK_HEXNUM
 %token TOK_CSYM
 %token TOK_SYM
+%token TOK_DSYM
 %token TOK_QSTR
 %token TOK_SELN
 %start inp
@@ -44,6 +45,7 @@ decnum:
     vm_push(0);                /* Just for keeping a reference while parsing */
     $$ = R0;
 }
+	;
 
 hexnum:
         TOK_HEXNUM
@@ -56,6 +58,7 @@ hexnum:
     vm_push(0);
     $$ = R0;
 }
+	;
 
 floatnum:
 	TOK_FLOATNUM
@@ -78,6 +81,7 @@ csym:
     vm_push(0);
     $$ = R0;
 }
+	;
 
 qstr:
         TOK_QSTR
@@ -123,6 +127,7 @@ qstr:
     vm_push(0);
     $$ = R0;
 }
+	;
 
 sym:
         TOK_SYM
@@ -132,6 +137,46 @@ sym:
     vm_push(0);
     $$ = R0;
 }
+	;
+
+dsym:
+	TOK_DSYM
+{
+    unsigned k, n;
+    char     *p, *q;
+
+    vm_pushm(1, 4);
+
+    for (k = 0, p = yytext;; p = q + 1, ++k) {
+	q = index(p, '.');
+	n = q ? q - p : strlen(p);
+
+	string_new(4, 1, n, p);
+
+	if (k == 0) {
+	    vm_assign(1, R4);
+	    continue;
+	}
+	
+	cons(3, consts.cl.list, consts.str.quote, NIL);
+	cons(3, consts.cl.list, R4, R3);
+	method_call_new(2, R3);
+	cons(3, consts.cl.list, R2, NIL);
+	cons(3, consts.cl.list, consts.str.atc, R3);
+	cons(2, consts.cl.list, R1, R3);
+	method_call_new(1, R2);
+
+	if (q == 0)  break;
+    }
+	
+    vm_assign(0, R1);
+    
+    vm_popm(1, 4);
+
+    vm_push(0);
+    $$ = R0;
+}
+	;
 
 seln:
         TOK_SELN
@@ -141,6 +186,7 @@ seln:
     vm_push(0);
     $$ = R0;
 }
+	;
 
 atom:
         decnum
@@ -271,7 +317,14 @@ method_call_sel_and_args:
         ;
 
 method_call:
-	TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
+	dsym
+{
+    vm_assign(0, $1);
+
+    vm_push(0);
+    $$ = R0;
+}
+	| TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
 {
     vm_pushm(1, 2);
 

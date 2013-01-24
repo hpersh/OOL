@@ -33,14 +33,6 @@ int  yyparse();
 
 /***************************************************************************/
 
-enum fatal_errcode {
-    FATAL_ERR_NO_MEM,
-    FATAL_ERR_STACK_OVERFLOW,
-    FATAL_ERR_STACK_UNDERFLOW,
-    FATAL_ERR_DOUBLE_ERR,
-    FATAL_ERR_BAD_ERR_STREAM
-};
-
 void
 fatal(enum fatal_errcode errcode)
 {
@@ -441,7 +433,7 @@ root_walk(void (*func)(obj_t))
     
     for (p = sp; p < stack_end; ++p)  (*func)(*p);
     
-    (*func)(env);
+    (*func)(module_main);
 
     for (r = root; r; r = r->next) {
 	for (p = (obj_t *)(r + 1), n = r->size; n; --n, ++p) {
@@ -663,22 +655,6 @@ void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
 
 /***************************************************************************/
 
-enum errcode {
-    ERR_ASSERT,
-    ERR_SYM_NOT_BOUND,
-    ERR_NO_METHOD,
-    ERR_INVALID_METHOD,
-    ERR_INVALID_ARG,
-    ERR_INVALID_VALUE,
-    ERR_NUM_ARGS,
-    ERR_BREAK,
-    ERR_CONT,
-    ERR_RETURN,
-    ERR_FILE_OPEN,
-    ERR_CONST,
-    ERR_OVF
-};
-
 jmp_buf jmp_buf_top;
 
 unsigned err_depth;
@@ -754,7 +730,17 @@ error(enum errcode errcode, ...)
 	obj = va_arg(ap, obj_t);
 	method_call_1(obj, consts.str.printc, outf);
 	break;
-    case ERR_INVALID_VALUE:
+    case ERR_INVALID_VALUE_1:
+	{
+	    char *s;
+
+	    s    = va_arg(ap, char *);
+	    obj  = va_arg(ap, obj_t);
+	    fprintf(fp, "Invalid value for %s: ", s);
+	    method_call_1(obj, consts.str.printc, outf);
+	}
+	break;
+    case ERR_INVALID_VALUE_2:
 	{
 	    obj_t obj2;
 
@@ -784,10 +770,26 @@ error(enum errcode errcode, ...)
 	    
 	    obj    = va_arg(ap, obj_t);
 	    errnum = va_arg(ap, int);
-	    fprintf(fp, "File open failed - %s ", strerror(errnum));
+	    fprintf(fp, "File open failed (%s): ", strerror(errnum));
 	    method_call_1(obj, consts.str.printc, outf);
 	}
 	
+	break;
+    case ERR_MODULE_LOAD:
+	{
+	    int errnum;
+	    
+	    obj    = va_arg(ap, obj_t);
+	    errnum = va_arg(ap, int);
+	    fprintf(fp, "Module load failed (%s): ", strerror(errnum));
+	    method_call_1(obj, consts.str.printc, outf);
+	}
+	
+	break;
+    case ERR_MODULE_MEMBER:
+	fprintf(fp, "No module member: ");
+	obj = va_arg(ap, obj_t);
+	method_call_1(obj, consts.str.printc, outf);
 	break;
     case ERR_CONST:
 	fprintf(fp, "Attempt to write constant");
@@ -814,14 +816,17 @@ error(enum errcode errcode, ...)
 #define MC_FRAME_BEGIN(s, a)			\
     {                                           \
 	struct mc_frame __mcf[1];		\
+	obj_t           __prev_module;          \
 						\
 	memset(__mcf, 0, sizeof(*__mcf));	\
 	__mcf->prev = mcfp;			\
 	mcfp = __mcf;				\
 	mcfp->sel  = (s);			\
-	mcfp->args = (a);			
+	mcfp->args = (a);			\
+	__prev_module = module_cur;
 
 #define MC_FRAME_END				\
+        module_cur = __prev_module;		\
         mcfp = mcfp->prev;			\
     }
 
@@ -832,7 +837,8 @@ void  dict_at_put(obj_t dict, obj_t key, obj_t val);
 void
 method_run(obj_t cl, obj_t func, unsigned argc)
 {
-    mcfp->cl = cl;
+    mcfp->cl   = cl;
+    module_cur = CLASS(cl)->module;
 
     if (is_kind_of(func, consts.cl.code_method)) {
         (* CODE_METHOD(func)->func)(argc);
@@ -1184,10 +1190,12 @@ cm_object_eq(unsigned argc)
     boolean_new(0, MC_FRAME_RECVR == MC_FRAME_ARG_0);
 }
 
+void class_name(obj_t cl);
+
 void
 cm_object_tostring(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR, cl_name;
+    obj_t recvr = MC_FRAME_RECVR;
     char  buf[64];
 
     if (argc != 0)  error(ERR_NUM_ARGS);
@@ -1197,9 +1205,9 @@ cm_object_tostring(unsigned argc)
         return;
     }
 
-    cl_name = CLASS(inst_of(recvr))->name;
+    class_name(inst_of(recvr));
     string_new(0, 3, snprintf(buf, sizeof(buf), "<inst @ %p, of class ", recvr), buf,
-                     STRING(cl_name)->size, STRING(cl_name)->data,
+                     STRING(R0)->size, STRING(R0)->data,
                      1, ">"
                );
 }
@@ -1318,7 +1326,7 @@ cm_object_while(unsigned argc)
 	
 	for (;;) {
 	    method_call_0(recvr, consts.str.eval);
-	    if (!is_kind_of(R0, consts.cl.boolean))  error(ERR_INVALID_VALUE, recvr, R0);
+	    if (!is_kind_of(R0, consts.cl.boolean))  error(ERR_INVALID_VALUE_2, recvr, R0);
 	    if (!BOOLEAN(R0)->val)  break;
 	    method_call_0(arg, consts.str.eval);
 	}
@@ -1371,10 +1379,59 @@ _inst_walk_metaclass(obj_t inst, void (*func)(obj_t))
 {
     (*func)(CLASS(inst)->name);
     (*func)(CLASS(inst)->parent);
+    (*func)(CLASS(inst)->module);
     (*func)(CLASS(inst)->cl_methods);
     (*func)(CLASS(inst)->cl_vars);
     (*func)(CLASS(inst)->inst_methods);
     (*func)(CLASS(inst)->inst_vars);
+}
+
+void inst_walk_user(obj_t cl, obj_t inst, void (*func)(obj_t));
+
+void
+inst_init_metaclass(obj_t cl, obj_t inst, va_list ap)
+{
+    obj_t       name      = va_arg(ap, obj_t);
+    obj_t       parent    = va_arg(ap, obj_t);
+    unsigned    inst_size = va_arg(ap, unsigned);
+    inst_init_t inst_init = va_arg(ap, inst_init_t);
+    inst_walk_t inst_walk = va_arg(ap, inst_walk_t);
+    inst_free_t inst_free = va_arg(ap, inst_free_t);
+
+    vm_push(1);
+
+    OBJ_ASSIGN(CLASS(inst)->name,   name);
+    OBJ_ASSIGN(CLASS(inst)->parent, parent);
+    OBJ_ASSIGN(CLASS(inst)->module, module_cur);
+    string_dict_new(1, 16);
+    OBJ_ASSIGN(CLASS(inst)->cl_methods, R1);
+    string_dict_new(1, 16);
+    OBJ_ASSIGN(CLASS(inst)->cl_vars, R1);
+    string_dict_new(1, 16);
+    OBJ_ASSIGN(CLASS(inst)->inst_methods, R1);
+    string_dict_new(1, 16);
+    OBJ_ASSIGN(CLASS(inst)->inst_vars, R1);
+    CLASS(inst)->inst_size = inst_size;
+    CLASS(inst)->inst_init = inst_init;
+    CLASS(inst)->inst_walk = inst_walk;
+    CLASS(inst)->inst_free = inst_free;
+
+    vm_pop(1);
+
+    inst_init_parent(cl, inst, ap);
+}
+
+void
+class_new(unsigned dst, obj_t name, obj_t parent, unsigned inst_size,
+	  inst_init_t _inst_init, inst_walk_t _inst_walk, inst_free_t _inst_free
+	  )
+{
+    vm_inst_alloc(dst, consts.cl.metaclass);
+    inst_init(regs[dst], name, parent, inst_size,
+	      _inst_init, _inst_walk, _inst_free
+	      );
+
+    env_new_put(name, regs[dst]); /* Add class to environment */
 }
 
 void
@@ -1385,6 +1442,25 @@ inst_walk_metaclass(obj_t cl, obj_t inst, void (*func)(obj_t))
     inst_walk_parent(cl, inst, func);
 }
 
+void module_name(obj_t mod);
+
+void
+class_name(obj_t cl)
+{
+    obj_t s;
+
+    s = CLASS(cl)->name;
+    module_name(CLASS(cl)->module);
+    if (STRING(R0)->size == 0) {
+	vm_assign(0, s);
+    } else {
+	string_new(0, 3, STRING(R0)->size, STRING(R0)->data,
+		         1, ".",
+		         STRING(s)->size, STRING(s)->data
+		   );
+    }
+}
+
 void
 cm_metaclass_name(unsigned argc)
 {
@@ -1393,7 +1469,7 @@ cm_metaclass_name(unsigned argc)
     if (!is_kind_of(recvr, consts.cl.metaclass))  error(ERR_INVALID_ARG, recvr);
     if (argc != 0)                                error(ERR_NUM_ARGS);
 
-    vm_assign(0, CLASS(recvr)->name);
+    class_name(recvr);
 }
 
 void
@@ -1442,14 +1518,13 @@ inst_walk_user(obj_t cl, obj_t inst, void (*func)(obj_t))
     inst_walk_parent(cl, inst, func);
 }
 
-void string_dict_new(unsigned dst, unsigned size);
-obj_t env_new(obj_t, obj_t);
+unsigned list_len(obj_t);
 
 void
 cm_metaclass_new(unsigned argc)
 {
     obj_t    recvr = MC_FRAME_RECVR, parent, inst_vars;
-    unsigned inst_size;
+    unsigned i;
 
     if (recvr != consts.cl.metaclass)  error(ERR_INVALID_ARG, recvr);
     if (argc != 3)                     error(ERR_NUM_ARGS);
@@ -1460,30 +1535,15 @@ cm_metaclass_new(unsigned argc)
 
     vm_push(1);
 
-    vm_inst_alloc(0, consts.cl.metaclass);
-    OBJ_ASSIGN(CLASS(R0)->name,   MC_FRAME_ARG_0);
-    OBJ_ASSIGN(CLASS(R0)->parent, parent);
-    string_dict_new(1, 16);
-    OBJ_ASSIGN(CLASS(R0)->cl_methods, R1);
-    string_dict_new(1, 16);
-    OBJ_ASSIGN(CLASS(R0)->cl_vars, R1);
-    string_dict_new(1, 16);
-    OBJ_ASSIGN(CLASS(R0)->inst_methods, R1);
-    string_dict_new(1, 16);
-    OBJ_ASSIGN(CLASS(R0)->inst_vars, R1);
-    for (inst_size = CLASS(CLASS(R0)->parent)->inst_size;
-         inst_vars;
-         inst_vars = CDR(inst_vars), inst_size += sizeof(obj_t)
-         ) {
-        integer_new(1, inst_size);
+    class_new(0, MC_FRAME_ARG_0, parent,
+	      CLASS(parent)->inst_size + list_len(inst_vars) * sizeof(obj_t),
+	      inst_init_parent, inst_walk_user, inst_free_parent
+	      );
+    
+    for (i = CLASS(parent)->inst_size; inst_vars; inst_vars = CDR(inst_vars), i += sizeof(obj_t)){
+        integer_new(1, i);
         dict_at_put(CLASS(R0)->inst_vars, CAR(inst_vars), R1);
     }
-    CLASS(R0)->inst_size = inst_size;
-    CLASS(R0)->inst_init = inst_init_parent;
-    CLASS(R0)->inst_walk = inst_walk_user;
-    CLASS(R0)->inst_free = inst_free_parent;
-
-    env_new(CLASS(R0)->name, R0);
 
     vm_pop(1);
 }
@@ -1506,8 +1566,6 @@ code_method_new(unsigned dst, void (*func)(unsigned))
     vm_inst_alloc(dst, consts.cl.code_method);
     inst_init(regs[dst], func);
 }
-
-unsigned list_len(obj_t);
 
 void
 cm_code_method_eval(unsigned argc)
@@ -2132,6 +2190,8 @@ string_new(unsigned dst, unsigned n, ...)
     va_list  ap;
     unsigned nn, size;
 
+    vm_push(dst);
+
     va_start(ap, n);
     for (size = 0, nn = n; nn; --nn) {
         unsigned s  = va_arg(ap, unsigned);
@@ -2154,6 +2214,8 @@ string_new(unsigned dst, unsigned n, ...)
         size += s;
     }
     va_end(ap);
+
+    vm_drop();
 }
 
 void
@@ -2242,8 +2304,6 @@ cm_string_append(unsigned argc)
                );
 }
 
-obj_t env_at(obj_t s);
-
 void
 cm_string_eval(unsigned argc)
 {
@@ -2273,7 +2333,7 @@ cm_string_print(unsigned argc)
     obj_t recvr = MC_FRAME_RECVR;
 
     method_call_0(consts.cl.file, consts.str._stdout);
-    if (inst_of(R0) != consts.cl.file)  error(ERR_INVALID_VALUE, consts.str._stdout, R0);
+    if (inst_of(R0) != consts.cl.file)  error(ERR_INVALID_VALUE_1, "stdout", R0);
 
     string_print(recvr, _FILE(R0)->fp);
 
@@ -3016,7 +3076,7 @@ cm_block_eval(unsigned argc)
     env_push();
     
     for (p = CAR(BLOCK(MC_FRAME_RECVR)->list), q = MC_FRAME_ARG_0; p; p = CDR(p), q = CDR(q)) {
-        env_new(CAR(p), CAR(q));
+        env_new_put(CAR(p), CAR(q));
     }
 
     JF_BEGIN(JF_TYPE_BLOCK) {
@@ -3366,28 +3426,30 @@ cm_dict_tostring(unsigned argc)
 
 /* Class: Environment */
 
+#define ENV  (MODULE(module_cur)->env)
+
 void
 env_push(void)
 {
-    vm_pushm(1, 2);
+    vm_push(1);
 
     string_dict_new(1, 64);
-    cons(2, consts.cl.list, R1, env);
-    OBJ_ASSIGN(env, R2);
+    cons(1, consts.cl.list, R1, ENV);
+    OBJ_ASSIGN(ENV, R1);
 
-    vm_popm(1, 2);
+    vm_pop(1);
 }
 
 void
 env_pop(void)
 {
-    OBJ_ASSIGN(env, CDR(env));
+    OBJ_ASSIGN(ENV, CDR(ENV));
 }
 
 obj_t
-env_new(obj_t s, obj_t val)
+env_new_put(obj_t s, obj_t val)
 {
-    dict_at_put(CAR(env), s, val);
+    dict_at_put(CAR(ENV), s, val);
 
     return (val);
 }
@@ -3395,24 +3457,26 @@ env_new(obj_t s, obj_t val)
 void
 cm_env_new(unsigned argc)
 {
-    vm_assign(0, env_new(MC_FRAME_ARG_0, NIL));
+    vm_assign(0, env_new_put(MC_FRAME_ARG_0, NIL));
 }
 
 void
 cm_env_new_put(unsigned argc)
 {
-    vm_assign(0, env_new(MC_FRAME_ARG_0, MC_FRAME_ARG_1));
+    vm_assign(0, env_new_put(MC_FRAME_ARG_0, MC_FRAME_ARG_1));
 }
 
 obj_t 
 env_find(obj_t s)
 {
-    obj_t p, q;
+    obj_t m, p, q;
 
-    for (p = env; p; p = CDR(p)) {
-        if (q = dict_at(CAR(p), s)) {
-            return (q);
-        }
+    for (m = module_cur; m; m = MODULE(m)->parent) {
+	for (p = MODULE(m)->env; p; p = CDR(p)) {
+	    if (q = dict_at(CAR(p), s)) {
+		return (q);
+	    }
+	}
     }
 
     return (NIL);
@@ -3440,14 +3504,14 @@ env_at_put(obj_t s, obj_t val)
 
         OBJ_ASSIGN(CDR(p), val);
     } else {
-        dict_at_put(CAR(env), s, val);
+	env_new_put(s, val);
     }
 }
 
 void
 env_del(obj_t s)
 {
-    dict_del(CAR(env), s);
+    dict_del(CAR(ENV), s);
 }
 
 void
@@ -3682,35 +3746,158 @@ cm_file_readln(unsigned argc)
 void
 inst_init_module(obj_t cl, obj_t inst, va_list ap)
 {
-    void *ptr = va_arg(ap, void *);
+    obj_t name     = va_arg(ap, obj_t);
+    obj_t parent   = va_arg(ap, obj_t);
 
-    MODULE(inst)->ptr = ptr;
+    vm_push(1);
+
+    OBJ_ASSIGN(MODULE(inst)->name, name);
+    OBJ_ASSIGN(MODULE(inst)->parent, parent);
+    string_dict_new(1, 64);
+    cons(1, consts.cl.list, R1, NIL);
+    OBJ_ASSIGN(MODULE(inst)->env, R1);
+
+    vm_pop(1);
 
     inst_init_parent(cl, inst, ap);
 }
 
 void
+inst_walk_module(obj_t cl, obj_t inst, void (*func)(obj_t))
+{
+    (*func)(MODULE(inst)->name);
+    (*func)(MODULE(inst)->parent);
+    (*func)(MODULE(inst)->env);
+    (*func)(MODULE(inst)->filename);
+
+    inst_walk_parent(cl, inst, func);
+}
+
+void
 inst_free_module(obj_t cl, obj_t inst)
 {
-    dlclose(MODULE(inst)->ptr);
+    void *p;
+
+    if (p = MODULE(inst)->ptr)  dlclose(p);
 
     inst_free_parent(cl, inst);
 }
 
 void
-cm_module_new(unsigned argc)
+module_new(unsigned dst, obj_t name, obj_t parent)
 {
-    void *ptr;
+    vm_inst_alloc(dst, consts.cl.module);
+    inst_init(regs[dst], name, parent);
 
-    vm_push(1);
+    /* Add of module to environment deferred */
+}
 
-    vm_inst_alloc(0, consts.cl.module);
-    string_tocstr(1, MC_FRAME_ARG_0);
-    ptr = dlopen(STRING(R1)->data, RTLD_NOW);
-    ASSERT(ptr != 0);
-    inst_init(R0, ptr);
+void
+module_name(obj_t mod)
+{
+    obj_t p, s;
 
-    vm_pop(1);
+    string_new(0, 1, 0, 0);
+    for ( ; p = MODULE(mod)->parent; mod = p) {
+	s = MODULE(mod)->name;
+
+	if (STRING(R0)->size == 0) {
+	    vm_assign(0, s);
+	    continue;
+	}
+
+	string_new(0, 3, STRING(s)->size, STRING(s)->data,
+		         1, ".",
+		         STRING(R0)->size, STRING(R0)->data
+		   );
+    }
+}
+
+void
+cm_module_name(unsigned argc)
+{
+    module_name(MC_FRAME_RECVR);
+}
+
+void
+cm_module_tostring(unsigned argc)
+{
+    cm_module_name(argc);
+}
+
+void
+cm_module_load(unsigned argc)
+{
+    obj_t arg, p, q, module_prev;
+    void  *ptr = 0;
+
+    if (argc != 1)  error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (!is_kind_of(arg, consts.cl.string))  error(ERR_INVALID_ARG, arg);
+
+    vm_pushm(1, 5);
+
+    method_call_0(consts.cl.module, consts.str.path);
+    if (!is_kind_of(R0, consts.cl.list))  error(ERR_INVALID_VALUE_1, "module path", R0);
+
+    module_new(1, arg, module_cur); /* R1 = new module */
+    vm_assign(2, R0);		/* R2 = path list */
+    string_tocstr(3, arg);	/* R3 = module name as C string */
+    string_new(4, 2, STRING(arg)->size, STRING(arg)->data,
+	             4, ".so"
+	       );		/* R4 = module name + ".so" as C string */
+
+    module_prev = module_cur;
+    module_cur = R1;
+
+    for (p = R2; p; p = CDR(p)) {
+	q = CAR(p);
+	if (!is_kind_of(q, consts.cl.string))  error(ERR_INVALID_VALUE_1, "module path member", q);
+
+	string_new(5, 3, STRING(q)->size, STRING(q)->data,
+   		         1, "/",
+		         STRING(R4)->size, STRING(R4)->data
+		   );
+	ptr = dlopen(STRING(R5)->data, RTLD_NOW);
+	if (ptr != 0)  break;
+
+	string_new(5, 3, STRING(q)->size, STRING(q)->data,
+   		         1, "/",
+		         STRING(R3)->size, STRING(R3)->data
+		   );
+	/* Load text file */
+    }
+
+    if (p == NIL) {
+	/* Load failed */
+
+	error(ERR_MODULE_LOAD, arg, errno);
+    }
+
+    dict_at_put(CAR(MODULE(module_prev)->env), arg, R1); /* Add module to parent environment */
+
+    string_new(2, 1, STRING(R5)->size - 1, STRING(R5)->data);
+    OBJ_ASSIGN(MODULE(R1)->filename, R2);
+    MODULE(R1)->ptr = ptr;
+
+    module_cur = module_prev;
+
+    vm_assign(0, R1);
+
+    vm_popm(1, 5);
+}
+
+void
+cm_module_at(unsigned argc)
+{
+    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, module_prev;
+
+    module_prev = module_cur;
+    module_cur  = recvr;
+
+    vm_assign(0, env_at(arg));
+
+    module_cur = module_prev;
 }
 
 /***************************************************************************/
@@ -3846,7 +4033,7 @@ const struct init_cl init_cl_tbl[] = {
       &consts.str.Module,
       sizeof(struct inst_module),
       inst_init_module,
-      inst_walk_parent,
+      inst_walk_module,
       inst_free_module
     },
     /* Not really instantiable... */
@@ -3917,6 +4104,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.length,      "length" },
     { &consts.str.load,        "load" },
     { &consts.str.ltc,         "lt:" },
+    { &consts.str.main,        "main" },
     { &consts.str.mapc,        "map:" },
     { &consts.str.minus,       "minus" },
     { &consts.str.mode,        "#mode" },
@@ -3932,6 +4120,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str.not,         "not" },
     { &consts.str.orc,         "or:" },
     { &consts.str.parent,      "#parent" },
+    { &consts.str.path,        "path" },
     { &consts.str.pquote,      "pquote" },
     { &consts.str.print,       "print" },
     { &consts.str.printc,      "print:" },
@@ -3982,7 +4171,7 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.array,       &consts.str.newc,     cm_array_new },
     { &consts.cl.dict,        &consts.str.new,      cm_dict_new },
     { &consts.cl.file,        &consts.str.newc_modec, cm_file_new },
-    { &consts.cl.module,      &consts.str.newc,     cm_module_new },
+    { &consts.cl.module,      &consts.str.newc,     cm_module_load },
     { &consts.cl.system,      &consts.str.exit,     cm_system_exit },
     { &consts.cl.system,      &consts.str.exitc,    cm_system_exitc },
     { &consts.cl.env,         &consts.str.newc,     cm_env_new },
@@ -4100,7 +4289,8 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.dict,        &consts.str.tostring,   cm_dict_tostring },
     { &consts.cl.file,        &consts.str.readc,      cm_file_read },
     { &consts.cl.file,        &consts.str.readln,     cm_file_readln },
-    { &consts.cl.file,        &consts.str.load,       cm_file_load }
+    { &consts.cl.file,        &consts.str.load,       cm_file_load },
+    { &consts.cl.module,      &consts.str.atc,        cm_module_at }
 #ifdef DEBUG
     ,
     { &consts.cl.boolean,     &consts.str.assert,     cm_boolean_assert }
@@ -4122,23 +4312,10 @@ init_cls(const struct init_cl *tbl, unsigned n)
     vm_push(1);
 
     for ( ; n; --n, ++tbl) {
-        vm_inst_alloc(1, consts.cl.metaclass);
-        obj_assign(tbl->pcl, R1);
-        CLASS(*tbl->pcl)->inst_size = tbl->inst_size;
-        CLASS(*tbl->pcl)->inst_init = tbl->inst_init;
-        CLASS(*tbl->pcl)->inst_walk = tbl->inst_walk;
-        CLASS(*tbl->pcl)->inst_free = tbl->inst_free;
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->parent, *tbl->pparent);
-        string_dict_new(1, 16);
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->cl_methods, R1);
-        string_dict_new(1, 16);
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->inst_methods, R1);
-        string_dict_new(1, 16);
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->cl_vars, R1);
-        string_dict_new(1, 16);
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->inst_vars, R1);
-        OBJ_ASSIGN(CLASS(*tbl->pcl)->name, *tbl->pname);
-        env_at_put(*tbl->pname, *tbl->pcl);
+	class_new(1, *tbl->pname, *tbl->pparent, tbl->inst_size,
+		  *tbl->inst_init, *tbl->inst_walk, *tbl->inst_free
+		  );
+	obj_assign(tbl->pcl, R1);
     }
 
     vm_pop(1);
@@ -4220,7 +4397,7 @@ env_init(void)
     OBJ_ASSIGN(consts.cl.metaclass, (obj_t) zcmalloc(sizeof(struct inst_metaclass)));
     list_insert(&consts.cl.metaclass->list_node, LIST_END(OBJ_LIST_ACTIVE));
     CLASS(consts.cl.metaclass)->inst_size = sizeof(struct inst_metaclass);
-    CLASS(consts.cl.metaclass)->inst_init = inst_init_parent;
+    CLASS(consts.cl.metaclass)->inst_init = inst_init_metaclass;
     CLASS(consts.cl.metaclass)->inst_walk = inst_walk_metaclass;
     CLASS(consts.cl.metaclass)->inst_free = inst_free_parent;
 
@@ -4240,7 +4417,7 @@ env_init(void)
 
     OBJ_ASSIGN(consts.cl.metaclass->inst_of, consts.cl.object);
 
-    /* Step 4.  Fix up parents for all classes */
+    /* Step 10.  Fix up classes, part 1 - parentage */
 
     OBJ_ASSIGN(CLASS(consts.cl.metaclass)->parent, consts.cl.object);
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
@@ -4285,14 +4462,31 @@ env_init(void)
 
     /* Step 9.  Set up the top-level Environment */
 
-    OBJ_ASSIGN(env, 0);
-    env_push();
+    module_new(1, consts.str.main, NIL);
+    OBJ_ASSIGN(module_main, R1);
+    module_cur = R1;
 
-    env_at_put(consts.str.nil, NIL);
+    env_new_put(consts.str.nil, NIL);
     boolean_new(1, 1);
-    env_at_put(consts.str._true, R1);
+    env_new_put(consts.str._true, R1);
     boolean_new(1, 0);
-    env_at_put(consts.str._false, R1);
+    env_new_put(consts.str._false, R1);
+
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->name, consts.str.Metaclass);
+    env_new_put(consts.str.Metaclass, consts.cl.metaclass);
+    for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
+        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->name, *init_cl_tbl[i].pname);
+        env_new_put(*init_cl_tbl[i].pname, *init_cl_tbl[i].pcl);
+    }
+
+    /* Step 10.  Fix up classes, part 2 - module membership */
+
+    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->module, module_main);
+    for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
+	OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->module, module_main);
+    }
+
+    /* Step 11.  Init class variables */
 
     file_new(0, NIL, NIL, stdin);
     dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stdin, R0);
@@ -4301,12 +4495,9 @@ env_init(void)
     file_new(0, NIL, NIL, stderr);
     dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stderr, R0);
 
-    OBJ_ASSIGN(CLASS(consts.cl.metaclass)->name, consts.str.Metaclass);
-    env_at_put(consts.str.Metaclass, consts.cl.metaclass);
-    for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
-        OBJ_ASSIGN(CLASS(*init_cl_tbl[i].pcl)->name, *init_cl_tbl[i].pname);
-        env_at_put(*init_cl_tbl[i].pname, *init_cl_tbl[i].pcl);
-    }
+    string_new(1, 1, 1, ".");
+    cons(1, consts.cl.list, R1, NIL);
+    dict_at_put(CLASS(consts.cl.module)->cl_vars, consts.str.path, R1);
 }
 
 void
@@ -4371,6 +4562,7 @@ interactive(void)
 
     yy_popall();
     while (sp < stack_end)  vm_drop();
+    module_cur = module_main;
     mcfp = 0;
     jfp  = 0;
 

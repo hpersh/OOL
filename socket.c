@@ -19,15 +19,18 @@ struct inst_socket {
 
 struct {
     struct root_hdr hdr;
-    obj_t module;
     struct {
 	obj_t socket;
     } cl;
     struct {
 	obj_t Socket;
+	obj_t af_inet;
 	obj_t bindc;
 	obj_t connectc;
+	obj_t newc_protoc;
 	obj_t sendc;
+	obj_t sock_dgram;
+	obj_t sock_stream;
 	obj_t recvc;
     } str;
 } socket_consts;
@@ -52,8 +55,18 @@ inst_free_socket(obj_t cl, obj_t inst)
 void
 cm_socket_new(unsigned argc)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-
+    obj_t recvr = MC_FRAME_RECVR, af, proto;
+    int   fd;
+    
+    if (is_kind_of(recvr, socket_consts.cl.socket))  error(ERR_INVALID_ARG, recvr);
+    if (argc != 2)  error(ERR_NUM_ARGS);
+    af = MC_FRAME_ARG_0;
+    if (!is_kind_of(af, consts.cl.integer))  error(ERR_INVALID_ARG, af);
+    proto = MC_FRAME_ARG_1;
+    if (!is_kind_of(proto, consts.cl.integer))  error(ERR_INVALID_ARG, proto);
+    
+    fd = socket(INTEGER(af)->val, INTEGER(proto)->val, 0);
+    /* Extend error processing in modules */
     ASSERT(fd >= 0);
 
     vm_inst_alloc(0, socket_consts.cl.socket);
@@ -143,11 +156,15 @@ cm_socket_recv(unsigned argc)
 }
 
 const struct init_str socket_init_str_tbl[] = {
-    { &socket_consts.str.Socket,   "#Socket" },
-    { &socket_consts.str.bindc,    "bind:" },
-    { &socket_consts.str.connectc, "connect:" },
-    { &socket_consts.str.sendc,    "send:" },
-    { &socket_consts.str.recvc,    "recv:" }
+    { &socket_consts.str.Socket,      "Socket" },
+    { &socket_consts.str.bindc,       "bind:" },
+    { &socket_consts.str.connectc,    "connect:" },
+    { &socket_consts.str.sendc,       "send:" },
+    { &socket_consts.str.recvc,       "recv:" },
+    { &socket_consts.str.newc_protoc, "new:proto:" },
+    { &socket_consts.str.af_inet,     "#AF_INET" },
+    { &socket_consts.str.sock_dgram,  "#SOCK_DGRAM" },
+    { &socket_consts.str.sock_stream, "#SOCK_STREAM" }
 };
 
 const struct init_cl socket_init_cl_tbl[] = {
@@ -162,7 +179,7 @@ const struct init_cl socket_init_cl_tbl[] = {
 };
 
 const struct init_method socket_init_cl_method_tbl[] = {
-    { &socket_consts.cl.socket, &consts.str.new, cm_socket_new }
+    { &socket_consts.cl.socket, &socket_consts.str.newc_protoc, cm_socket_new }
 };
 
 const struct init_method socket_init_inst_method_tbl[] = {
@@ -175,22 +192,44 @@ const struct init_method socket_init_inst_method_tbl[] = {
 __attribute__((constructor))
 void socket_init(void)
 {
-    OBJ_ASSIGN(socket_consts.module, R0);
+    vm_push(1);
 
-    init_strs((const struct init_str *) &socket_init_str_tbl, ARRAY_SIZE(socket_init_str_tbl));
+    init_strs((const struct init_str *) &socket_init_str_tbl,
+	      ARRAY_SIZE(socket_init_str_tbl)
+	      );
 
-    init_cls((const struct init_cl *) &socket_init_cl_tbl, ARRAY_SIZE(socket_init_cl_tbl));
+    init_cls((const struct init_cl *) &socket_init_cl_tbl,
+	     ARRAY_SIZE(socket_init_cl_tbl)
+	     );
 
-    init_cl_methods((const struct init_method *) &socket_init_cl_method_tbl, ARRAY_SIZE(socket_init_cl_method_tbl));
-    init_inst_methods((const struct init_method *) &socket_init_inst_method_tbl, ARRAY_SIZE(socket_init_inst_method_tbl));
+    init_cl_methods((const struct init_method *) &socket_init_cl_method_tbl,
+		    ARRAY_SIZE(socket_init_cl_method_tbl)
+		    );
+    init_inst_methods((const struct init_method *) &socket_init_inst_method_tbl,
+		      ARRAY_SIZE(socket_init_inst_method_tbl)
+		      );
 
-    root_add(&socket_consts.hdr, (sizeof(socket_consts) - sizeof(socket_consts.hdr)) / sizeof(obj_t));
+    integer_new(1, AF_INET);
+    env_new_put(socket_consts.str.af_inet, R1);
+    integer_new(1, SOCK_DGRAM);
+    env_new_put(socket_consts.str.sock_dgram, R1);
+    integer_new(1, SOCK_STREAM);
+    env_new_put(socket_consts.str.sock_stream, R1);
+
+    /* TODO: Free everything instead, and rely on entry in environment?
+       Maybe simpler than deleting from root set at unload...
+    */
+    root_add(&socket_consts.hdr,
+	     (sizeof(socket_consts) - sizeof(socket_consts.hdr)) / sizeof(obj_t)
+	     );
+
+    vm_pop(1);
 }
 
 
 __attribute__((destructor))
 void socket_fini(void)
 {
-    
+    /* TODO: Need to delete from root set */
 }
 
