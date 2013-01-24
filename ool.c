@@ -668,7 +668,11 @@ bt_print(obj_t outf)
     fprintf(fp, "Backtrace:\n");
     for (p = mcfp; p; p = p->prev) {
 	fprintf(fp, "[");
-	method_call_1(p->cl, consts.str.printc, outf);
+	if (p->cl) {
+	    method_call_1(p->cl, consts.str.printc, outf);
+	} else {
+	    fprintf(fp, "<none>");
+	}
 	fprintf(fp, " ");
 	method_call_1(p->sel, consts.str.printc, outf);
 	fprintf(fp, "]");
@@ -837,8 +841,8 @@ void  dict_at_put(obj_t dict, obj_t key, obj_t val);
 void
 method_run(obj_t cl, obj_t func, unsigned argc)
 {
-    mcfp->cl   = cl;
-    module_cur = CLASS(cl)->module;
+    mcfp->cl = cl;
+    if (cl)  module_cur = CLASS(cl)->module;
 
     if (is_kind_of(func, consts.cl.code_method)) {
         (* CODE_METHOD(func)->func)(argc);
