@@ -11,7 +11,8 @@
 
 #include "ool.h"
 
-#define ASSERT  assert
+#define ASSERT       assert
+#define HARD_ASSERT  assert
 
 #define ARRAY_SIZE(a)  (sizeof(a) / sizeof((a)[0]))
 
@@ -26,10 +27,212 @@ struct {
 } debug;
 #endif
 
-void yy_push_file(FILE *fp, void *cookie), yy_push_str(char *, unsigned), yy_pop(void), yy_popall(void);
+void yy_push_file(FILE *fp, void *cookie), yy_push_str(char *, unsigned);
 char *yycookie(void);
 int  yyline(void);
 int  yyparse();
+
+/* We need a frame mechanism, for tracking history of:
+   - method calls, for printing backtraces, and resolving symbol lookups (via modules);
+   - input files, also for backtraces;
+   - blocks, for resolving symbol lookups;
+
+   Symbol resolution:
+   - env_at
+     . Search through frames, search each dict in each BLOCK frame, i.e. history
+       local variables
+     . Search through frames, search dict in first MODULE frame, i.e. module
+       namespace in effect
+   - env_new_put
+     . Search through frames, for first BLOCK or MODULE frame, add to dict
+   - env_at_put
+     . Find as in env_at; if found, change value, else do env_new_put
+*/
+
+struct frame {
+    struct frame *prev;
+    enum frame_type {
+	FRAME_TYPE_RESTART,	/* For restarting, after error */
+	FRAME_TYPE_INPUT,	/* Input stream */
+	FRAME_TYPE_METHOD_CALL,	/* Calling a method */
+	FRAME_TYPE_WHILE,	/* Running a "while" */
+	FRAME_TYPE_BLOCK,	/* Running a block */
+	FRAME_TYPE_MODULE	/* Defining or running a module */
+    } type;
+};
+
+struct frame_jmp {
+    struct frame base;
+    obj_t        *sp;		/* Recorded top of stack */
+    jmp_buf      jmp_buf;	/* For longjmp() */
+};
+#define FRAME_JMP(f)  ((struct frame_jmp *)(f))
+
+struct frame_input {
+    struct frame base;
+    obj_t        file;
+    void         *prev_yy_buf_state;
+};
+#define FRAME_INPUT(f)  ((struct frame_input *)(f))
+
+struct frame_method_call {
+    struct frame base;
+    obj_t        cl;
+    obj_t        sel;
+    obj_t        args;
+};
+#define FRAME_METHOD_CALL(f)  ((struct frame_method_call *)(f))
+
+struct frame_block {
+    struct frame_jmp base;
+    obj_t            dict;
+};
+#define FRAME_BLOCK(f)  ((struct frame_block *)(f))
+
+struct frame_module {
+    struct frame base;
+    obj_t        module;
+};
+#define FRAME_MODULE(f)  ((struct frame_module *)(f))
+
+struct frame *frp;
+
+void
+frame_goto(enum frame_type type, int arg)
+{
+    struct frame *p;
+
+    switch (type) {
+    case FRAME_TYPE_RESTART:
+	break;
+    case FRAME_TYPE_WHILE:
+	break;
+    case FRAME_TYPE_BLOCK:
+	break;
+    default:
+	HARD_ASSERT(0);
+    }
+
+    for (p = frp; p; p = p->prev) {
+	switch (p->type) {
+	case FRAME_TYPE_RESTART:
+	    if (type == FRAME_TYPE_RESTART)  goto do_jmp;
+	    break;
+
+	case FRAME_TYPE_INPUT:
+	    yy_pop(FRAME_INPUT(frp)->prev_yy_buf_state);
+	    break;
+	    
+	case FRAME_TYPE_METHOD_CALL:
+	    break;
+
+	case FRAME_TYPE_WHILE:
+	    if (type == FRAME_TYPE_WHILE)  goto do_jmp;
+	    break;
+
+	case FRAME_TYPE_BLOCK:
+	    if (type == FRAME_TYPE_BLOCK)  goto do_jmp;
+	    break;
+
+	case FRAME_TYPE_MODULE:
+	    break;
+
+	default:
+	    HARD_ASSERT(0);
+	}
+    }
+
+    return;
+
+ do_jmp:
+    while (sp < FRAME_JMP(frp)->sp)  vm_drop();
+    longjmp(FRAME_JMP(frp)->jmp_buf, arg);
+}
+
+void
+env_find(obj_t s, obj_t *pair, obj_t *dict_new)
+{
+    struct frame *p;
+    obj_t r, d = NIL, m = NIL;
+
+    for (p = frp; p; p = p->next) {
+	switch (p->type) {
+	case FRAME_TYPE_BLOCK:
+	    {
+		if (d == NIL)  d = FRAME_BLOCK(p)->dict;
+		if (r = dict_at(FRAME_BLOCK(p)->dict, s)) {
+		    *pair = r;
+		    return;
+		}
+	    }
+	    break;
+
+	case FRAME_TYPE_MODULE:
+	    {
+		if (d == NIL)  d = FRAME_MODULE(p)->module->dict;
+		if (m == NIL)  m = FRAME_MODULE(p)->module;
+	    }
+	    break;
+	    
+	default:
+	    ;
+	}
+    }
+
+    if (m && (r = dict_at(MODULE(m)->dict, s))) {
+	*pair = r;
+	return;
+    }
+
+    *pair = NIL;
+    if (dict_new)  *dict_new = d;
+}
+
+
+obj_t
+env_at(obj_t s)
+{
+    obj_t oair;
+
+    env_find(s, &pair, 0);
+    if (pair)  return (CDR(pair));
+
+    error(ERR_SYM_NOT_BOUND, s);
+}
+
+obj_t
+env_at_put(obj_t s, obj_t val)
+{
+    obj_t pair, dict_new;
+
+    env_find(s, &pair, &dict_new);
+    if (pair) {
+	OBJ_ASSIGN(CDR(pair), val);
+    } else {
+	dict_at_put(dict_new, s, val);
+    }
+
+    return (val);
+}
+
+obj_t
+env_new_put(obj_t s, obj_t val)
+{
+    for (p = frp; p; p = p->prev) {
+	if (p->type == FRAME_TYPE_BLOCK) {
+	    dict_at_put(FRAME_BLOCK(p)->dict, s, val);
+	    break;
+	}
+	if (p->type == FRAME_TYPE_MODULE) {
+	    dict_at_put(MODULE(FRAME_MODULE(p)->module)->dict, s, val);
+	    break;
+	}
+    }
+
+    HARD_ASSERT(p != 0);
+
+    return (val);
+}
 
 /***************************************************************************/
 
@@ -427,6 +630,7 @@ root_walk(void (*func)(obj_t))
 {
     unsigned        i, n;
     obj_t           *p;
+    struct frame    *q;
     struct root_hdr *r;
     
     for (i = 0; i < ARRAY_SIZE(regs); ++i)  (*func)(regs[i]);
@@ -434,6 +638,15 @@ root_walk(void (*func)(obj_t))
     for (p = sp; p < stack_end; ++p)  (*func)(*p);
     
     (*func)(module_main);
+    for (q = frp; q; q = q->prev) {
+	switch (q->type) {
+	case FRAME_TYPE_BLOCK:
+	    (*func)(((struct frame_block *) q)->dict);
+	    break;
+	default:
+	    ;
+	}
+    }
 
     for (r = root; r; r = r->next) {
 	for (p = (obj_t *)(r + 1), n = r->size; n; --n, ++p) {
@@ -655,8 +868,6 @@ void method_call_2(obj_t recvr, obj_t sel, obj_t arg1, obj_t arg2);
 
 /***************************************************************************/
 
-jmp_buf jmp_buf_top;
-
 unsigned err_depth;
 
 void
@@ -675,7 +886,7 @@ bt_print(obj_t outf)
 	}
 	fprintf(fp, " ");
 	method_call_1(p->sel, consts.str.printc, outf);
-	fprintf(fp, "]");
+	fprintf(fp, "] ");
 	method_call_1(p->args, consts.str.printc, outf);
 	fprintf(fp, "\n");
     }
@@ -812,7 +1023,7 @@ error(enum errcode errcode, ...)
 
     --err_depth;
 
-    longjmp(jmp_buf_top, 1);
+    frame_goto(FRAME_TYPE_RESTART, 0);
 }
 
 /***************************************************************************/
@@ -820,17 +1031,14 @@ error(enum errcode errcode, ...)
 #define MC_FRAME_BEGIN(s, a)			\
     {                                           \
 	struct mc_frame __mcf[1];		\
-	obj_t           __prev_module;          \
 						\
 	memset(__mcf, 0, sizeof(*__mcf));	\
 	__mcf->prev = mcfp;			\
 	mcfp = __mcf;				\
 	mcfp->sel  = (s);			\
 	mcfp->args = (a);			\
-	__prev_module = module_cur;
 
 #define MC_FRAME_END				\
-        module_cur = __prev_module;		\
         mcfp = mcfp->prev;			\
     }
 
@@ -842,18 +1050,15 @@ void
 method_run(obj_t cl, obj_t func, unsigned argc)
 {
     mcfp->cl = cl;
-    if (cl)  module_cur = CLASS(cl)->module;
 
     if (is_kind_of(func, consts.cl.code_method)) {
         (* CODE_METHOD(func)->func)(argc);
-        
-        return;
+	return;
     }
 
     if (is_kind_of(func, consts.cl.block)) {
         method_call_1(func, consts.str.evalc, MC_FRAME_ARGS);
-
-        return;
+	return;
     }
 
     error(ERR_INVALID_METHOD, func);
@@ -862,7 +1067,7 @@ method_run(obj_t cl, obj_t func, unsigned argc)
 void
 method_call(unsigned argc)
 {
-    obj_t recvr = MC_FRAME_RECVR, sel = MC_FRAME_SEL, cl;
+    obj_t recvr = MC_FRAME_RECVR, sel = MC_FRAME_SEL, cl, parent;
     unsigned sel_with_colon = 0;
 
     vm_push(1);
@@ -896,16 +1101,18 @@ method_call(unsigned argc)
         }
     }
 
-    for (cl = inst_of(recvr); cl; cl = CLASS(cl)->parent) {
+    for (cl = inst_of(recvr); cl; cl = parent) {
         obj_t obj;
+
+	parent = CLASS(cl)->parent;
 
         if (obj = dict_at(CLASS(cl)->inst_methods, sel)) {
             method_run(cl, CDR(obj), argc);
             goto done;
         }
 
-        if (argc <= 1 && (obj = dict_at(CLASS(cl)->inst_vars, R1))) {
-            obj_t *p = (obj_t *)((char *) recvr + INTEGER(CDR(obj))->val);
+        if (parent && argc <= 1 && (obj = dict_at(CLASS(cl)->inst_vars, R1))) {
+            obj_t *p = (obj_t *)((char *) recvr + (CLASS(parent)->inst_size + INTEGER(CDR(obj))->val));
 
             if (sel_with_colon) {
 		if (STRING(R1)->data[0] == '#')  error(ERR_CONST);
@@ -1369,7 +1576,7 @@ cm_object_return(unsigned argc)
 
     vm_assign(0, MC_FRAME_RECVR);
 
-    jf_jmp(JF_TYPE_BLOCK, JF_ACTION_RETURN);
+    frame_goto(FRAME_TYPE_BLOCK, 1);
 
     error(ERR_RETURN);
 }
@@ -1430,12 +1637,17 @@ class_new(unsigned dst, obj_t name, obj_t parent, unsigned inst_size,
 	  inst_init_t _inst_init, inst_walk_t _inst_walk, inst_free_t _inst_free
 	  )
 {
+    vm_push(dst);
+
     vm_inst_alloc(dst, consts.cl.metaclass);
     inst_init(regs[dst], name, parent, inst_size,
 	      _inst_init, _inst_walk, _inst_free
 	      );
+    
+    /* Add class to environment */
+    env_new_put(name, regs[dst]);
 
-    env_new_put(name, regs[dst]); /* Add class to environment */
+    vm_drop();
 }
 
 void
@@ -1544,7 +1756,7 @@ cm_metaclass_new(unsigned argc)
 	      inst_init_parent, inst_walk_user, inst_free_parent
 	      );
     
-    for (i = CLASS(parent)->inst_size; inst_vars; inst_vars = CDR(inst_vars), i += sizeof(obj_t)){
+    for (i = 0; inst_vars; inst_vars = CDR(inst_vars), i += sizeof(obj_t)){
         integer_new(1, i);
         dict_at_put(CLASS(R0)->inst_vars, CAR(inst_vars), R1);
     }
@@ -2925,8 +3137,12 @@ inst_walk_method_call(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 method_call_new(unsigned dst, obj_t list)
 {
+    vm_push(dst);
+
     vm_inst_alloc(dst, consts.cl.method_call);
     inst_init(regs[dst], list);
+
+    vm_drop();
 }
 
 void
@@ -3066,43 +3282,53 @@ inst_walk_block(obj_t cl, obj_t inst, void (*func)(obj_t))
 void
 block_new(unsigned dst, obj_t list)
 {
+    vm_push(dst);
+
     vm_inst_alloc(dst, consts.cl.block);
     inst_init(regs[dst], list);
-}
 
-void env_push(void), env_pop(void);
+    vm_drop();
+}
 
 void
 cm_block_eval(unsigned argc)
 {
-    obj_t p, q;
+    obj_t recvr = MC_FRAME_RECVR;
+    obj_t                   p;
+    struct frame_type_block frame;
     
-    env_push();
-    
-    for (p = CAR(BLOCK(MC_FRAME_RECVR)->list), q = MC_FRAME_ARG_0; p; p = CDR(p), q = CDR(q)) {
-        env_new_put(CAR(p), CAR(q));
+    if (!is_kind_of(recvr, consts.cl.block))  error(ERR_INVALID_ARG);
+    if (argc != 1)                            error(ERR_NUM_ARGS);
+    arg = MC_FRAME_ARG_0;
+    if (!is_kind_of(arg, consts.cl.list))     error(ERR_INVALID_ARG);
+    p = CAR(BLOCK(recvr)->list);
+    if (list_len(p) != list_len(arg))         error(ERR_NUM_ARGS);
+
+    vm_push(1);
+    string_dict_new(1, 16);
+    for ( ; p; p = CDR(p), arg = CDR(arg)) {
+        dict_at_put(R1, CAR(p), CAR(q));
+    }
+    vm_push(1);
+
+    frame.base.base.prev = frp;
+    frame.base.base.type = FRAME_TYPE_BLOCK;
+    frame.base.sp        = sp;
+    frame.dict           = R1;
+    frp = &frame.base.base;
+    if (setjmp(frame.base.jmp_buf) != 0)  goto done;
+
+    vm_assign(0, NIL);
+    for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
+	method_call_0(CAR(p), consts.str.eval);
     }
 
-    JF_BEGIN(JF_TYPE_BLOCK) {
-	switch (jf_action) {
-	case JF_ACTION_NONE:
-	    break;
-	case JF_ACTION_RETURN:
-	    goto done;
-	default:
-	    ASSERT(0);
-	}
-	
-	vm_assign(0, NIL);
-	for (p = CDR(BLOCK(MC_FRAME_RECVR)->list); p; p = CDR(p)) {
-	    method_call_0(CAR(p), consts.str.eval);
-	}
-	
-    done:
-	;
-    } JF_END;
+ done:
+    frp = frame.base.prev;
 
-    env_pop();
+    vm_drop();
+
+    vm_pop(1);
 }
 
 void
@@ -3272,29 +3498,29 @@ cm_dict_new(unsigned argc)
 }
 
 obj_t
-dict_find(obj_t dict, obj_t key, obj_t **bucket)
+dict_find(obj_t dict, obj_t key, obj_t **pprev)
 {
-    obj_t result = NIL, p;
-    obj_t *b = &DICT(dict)->base.data[(*DICT(dict)->hash_func)(key) % DICT(dict)->base.size];
+    obj_t p, *pp, *b = &DICT(dict)->base.data[(*DICT(dict)->hash_func)(key) % DICT(dict)->base.size];
 
-    for (p = *b; p; p = CDR(p)) {
+    for (pp = b; p = *pp; pp = &CDR(p)) {
         obj_t q = CAR(p);
 
         if ((*DICT(dict)->equal_func)(CAR(q), key)) {
-            result = q;
-            break;
+	    if (pprev)  *pprev = pp; 
+	    return (p);
         }
     }
 
-    if (bucket)  *bucket = b;
-
-    return (result);
+    if (pprev)  *pprev = b;
+    return (NIL);
 }
 
 obj_t
 dict_at(obj_t dict, obj_t key)
 {
-    return (dict_find(dict, key, 0));
+    obj_t p;
+
+    return ((p = dict_find(dict, key, 0)) ? CAR(p) : NIL);
 }
 
 void
@@ -3317,20 +3543,20 @@ dict_const_chk(obj_t key)
 void
 dict_at_put(obj_t dict, obj_t key, obj_t val)
 {
-    obj_t p, *bucket;
+    obj_t p, *pp;
 
-    if (p = dict_find(dict, key, &bucket)) {
+    if (p = dict_find(dict, key, &pp)) {
 	dict_const_chk(key);
 
-        OBJ_ASSIGN(CDR(p), val);
+        OBJ_ASSIGN(CDR(CAR(p)), val);
     } else {
-        vm_pushm(1, 2);
+        vm_push(1);
 
         cons(1, consts.cl.pair, key, val);
-        cons(2, consts.cl.list, R1, *bucket);
-        obj_assign(bucket, R2);
+        cons(1, consts.cl.list, R1, *pp);
+        obj_assign(pp, R1);
 
-        vm_popm(1, 2);
+        vm_pop(1);
     }
 }
 
@@ -3347,25 +3573,16 @@ cm_dict_at_put(unsigned argc)
 void
 dict_del(obj_t dict, obj_t key)
 {
-    obj_t p, *q;
+    obj_t p, *pp;
 
-    if (dict_find(dict, key, &q)) {
-        for (; p = *q; q = &CDR(p)) {
-            obj_t r = CAR(p);
+    if ((p = dict_find(dict, key, &pp)) == 0)  return;
 
-            if ((*DICT(dict)->equal_func)(CAR(r), key)) {
-                vm_push(1);
-                
-                vm_assign(1, CDR(p));
-                OBJ_ASSIGN(CDR(p), NIL);
-                obj_assign(q, R1);
+    vm_push(1);
 
-                vm_pop(1);
+    vm_assign(1, p);
+    obj_assign(pp, CDR(p));
 
-                break;
-            }
-        }
-    }
+    vm_pop(1);
 }
 
 void
@@ -3430,30 +3647,10 @@ cm_dict_tostring(unsigned argc)
 
 /* Class: Environment */
 
-#define ENV  (MODULE(module_cur)->env)
-
-void
-env_push(void)
-{
-    vm_push(1);
-
-    string_dict_new(1, 64);
-    cons(1, consts.cl.list, R1, ENV);
-    OBJ_ASSIGN(ENV, R1);
-
-    vm_pop(1);
-}
-
-void
-env_pop(void)
-{
-    OBJ_ASSIGN(ENV, CDR(ENV));
-}
-
 obj_t
 env_new_put(obj_t s, obj_t val)
 {
-    dict_at_put(CAR(ENV), s, val);
+    dict_at_put(CAR(env), s, val);
 
     return (val);
 }
@@ -3473,13 +3670,11 @@ cm_env_new_put(unsigned argc)
 obj_t 
 env_find(obj_t s)
 {
-    obj_t m, p, q;
+    obj_t p, q;
 
-    for (m = module_cur; m; m = MODULE(m)->parent) {
-	for (p = MODULE(m)->env; p; p = CDR(p)) {
-	    if (q = dict_at(CAR(p), s)) {
-		return (q);
-	    }
+    for (p = env; p; p = CDR(p)) {
+	if (q = dict_at(CAR(p), s)) {
+	    return (q);
 	}
     }
 
@@ -3515,7 +3710,7 @@ env_at_put(obj_t s, obj_t val)
 void
 env_del(obj_t s)
 {
-    dict_del(CAR(ENV), s);
+    dict_del(CAR(env), s);
 }
 
 void
@@ -3624,8 +3819,12 @@ inst_free_file(obj_t cl, obj_t inst)
 void
 file_new(unsigned dst, obj_t filename, obj_t mode, FILE *fp)
 {
+    vm_push(dst);
+
     vm_inst_alloc(dst, consts.cl.file);
     inst_init(regs[dst], filename, mode, fp);
+
+    vm_drop();
 }
 
 void
@@ -3758,8 +3957,7 @@ inst_init_module(obj_t cl, obj_t inst, va_list ap)
     OBJ_ASSIGN(MODULE(inst)->name, name);
     OBJ_ASSIGN(MODULE(inst)->parent, parent);
     string_dict_new(1, 64);
-    cons(1, consts.cl.list, R1, NIL);
-    OBJ_ASSIGN(MODULE(inst)->env, R1);
+    OBJ_ASSIGN(MODULE(inst)->dict, R1);
 
     vm_pop(1);
 
@@ -3790,10 +3988,14 @@ inst_free_module(obj_t cl, obj_t inst)
 void
 module_new(unsigned dst, obj_t name, obj_t parent)
 {
+    vm_push(dst);
+
     vm_inst_alloc(dst, consts.cl.module);
     inst_init(regs[dst], name, parent);
 
     /* Add of module to environment deferred */
+
+    vm_drop();
 }
 
 void
@@ -3834,6 +4036,7 @@ cm_module_load(unsigned argc)
 {
     obj_t arg, p, q, module_prev;
     void  *ptr = 0;
+    FILE  *fp = 0;
 
     if (argc != 1)  error(ERR_NUM_ARGS);
     arg = MC_FRAME_ARG_0;
@@ -3852,7 +4055,7 @@ cm_module_load(unsigned argc)
 	       );		/* R4 = module name + ".so" as C string */
 
     module_prev = module_cur;
-    module_cur = R1;
+    module_cur  = R1;
 
     for (p = R2; p; p = CDR(p)) {
 	q = CAR(p);
@@ -3869,7 +4072,19 @@ cm_module_load(unsigned argc)
    		         1, "/",
 		         STRING(R3)->size, STRING(R3)->data
 		   );
-	/* Load text file */
+	if (fp = fopen(STRING(R5)->data, "r+")) {
+	    /* TODO: Use file infrastructure */
+
+	    yy_push_file(fp, NIL);
+
+	    read_eval();
+	    
+	    yy_pop();
+
+	    fclose(fp);
+
+	    break;
+	}
     }
 
     if (p == NIL) {
@@ -3878,13 +4093,13 @@ cm_module_load(unsigned argc)
 	error(ERR_MODULE_LOAD, arg, errno);
     }
 
-    dict_at_put(CAR(MODULE(module_prev)->env), arg, R1); /* Add module to parent environment */
-
     string_new(2, 1, STRING(R5)->size - 1, STRING(R5)->data);
     OBJ_ASSIGN(MODULE(R1)->filename, R2);
     MODULE(R1)->ptr = ptr;
 
     module_cur = module_prev;
+
+    env_new_put(arg, R1); /* Add module to parent environment */
 
     vm_assign(0, R1);
 
@@ -4302,11 +4517,11 @@ const struct init_method init_inst_method_tbl[] = {
 };
 
 const struct init_inst_var init_inst_var_tbl[] = {
-    { &consts.cl.metaclass, &consts.str.class_methods,    sizeof(struct obj) + 2 * sizeof(obj_t) },
-    { &consts.cl.metaclass, &consts.str.class_variables,  sizeof(struct obj) + 3 * sizeof(obj_t) },
-    { &consts.cl.metaclass, &consts.str.instance_methods, sizeof(struct obj) + 4 * sizeof(obj_t) },
-    { &consts.cl.file,      &consts.str.name,             sizeof(struct obj) },
-    { &consts.cl.file,      &consts.str.mode,             sizeof(struct obj) + 1 * sizeof(obj_t) }
+    { &consts.cl.metaclass, &consts.str.class_methods,    3 * sizeof(obj_t) },
+    { &consts.cl.metaclass, &consts.str.class_variables,  4 * sizeof(obj_t) },
+    { &consts.cl.metaclass, &consts.str.instance_methods, 5 * sizeof(obj_t) },
+    { &consts.cl.file,      &consts.str.name,             0 * sizeof(obj_t) },
+    { &consts.cl.file,      &consts.str.mode,             1 * sizeof(obj_t) }
 };
 
 
@@ -4468,7 +4683,10 @@ env_init(void)
 
     module_new(1, consts.str.main, NIL);
     OBJ_ASSIGN(module_main, R1);
-    module_cur = R1;
+    
+    
+
+    
 
     env_new_put(consts.str.nil, NIL);
     boolean_new(1, 1);
@@ -4614,6 +4832,11 @@ main(int argc, char **argv)
 #endif
     
     init();
+    
+    frame.base.prev = frp;
+    frame.base.type = FRAME_TYPE_MODULE;
+    frame.module = module_main;
+    frp = &frame.base;
 
     if (argc == 1) {
 	interactive();

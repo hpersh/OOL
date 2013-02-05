@@ -114,7 +114,7 @@ struct inst_module {
     struct obj base;
     obj_t      name;
     obj_t      parent;
-    obj_t      env;
+    obj_t      dict;
     obj_t      filename;	/* NIL <=> Main (top-level module) */
     void       *ptr;		/* NIL <=> Not loaded from dynamic lib */
 };
@@ -152,7 +152,9 @@ enum errcode {
 void error(enum errcode errcode, ...);
 
 obj_t *sp;
-obj_t module_main, module_cur;
+obj_t *env;
+obj_t module_main;		/* Top-level module */
+obj_t module_cur;		/* Module currently executing */
 
 obj_t regs[8];
 #define R0   (regs[0])

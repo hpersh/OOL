@@ -1,5 +1,7 @@
 * TODO
 
+- need to distinguish current module to add to vs. current module running (i.e. method running -> class -> module)
+- unify frame scheme; subsume scanner buffers, modules,whiles, blocks, method_calls
 - short cut for "super": [<recvr> super: <sel> eval: <args>] => [[[[[[<recvr> instance-of] parent] instance-methods] at: <sel>] cdr] eval: <args>]
 - extend error processing in modules
 - exceptions?
@@ -11,22 +13,6 @@
 - readline
 - infinite-range integers
 - cleaner root-set interface for modules
-
-- module name hierarchy
-  - a.b.c.d => [[[[#Environment at: 'a] at: 'b] at: 'c] at: 'd]
-
-[#Module new: "socket"]
-[s = [socket.#Socket new: socket,#AF_INET protocol: socket.#SOCK_STREAM]]
-[s foo]
-
-  - module -> environment (stack)
-  - class -> module
-  - current module, set when method run -- prev_module = cur_module; cur_module = cl->module;
-    - module calling stack, for env lookups?
-  - top level module "main"
-  - modules entered into installing module's env
-
-
 - complete methods
 - complete error checking in methods
 - get rid of class constants, replace with env lookups
