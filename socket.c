@@ -74,27 +74,33 @@ cm_socket_new(unsigned argc)
 }
 
 void
-cm_socket_bind(unsigned argc)
+cm_socket_bind(unsigned argc, obj_t args)
 {
-    obj_t recvr = MC_FRAME_RECVR, arg = MC_FRAME_ARG_0, ipaddr = CAR(arg), port = CDR(arg);
-    struct sockaddr_in sockaddr;
-    int rc;
+  obj_t recvr, arg, ip_addr, port;
+  struct sockaddr_in sockaddr;
+  int rc;
 
-    vm_push(1);
+  if (argc != 2)  error(ERR_NUM_ARGS);
+  recvr = CAR(args);
+  if (!is_kind_of(recvr, socket_consts.cl.socket))  error(ERR_INVALID_ARG, recvr);
+  arg = CAR(CDR(args));
+  if (!is_kind_of(arg, consts.cl.pair))  error(ERR_INVALID_ARG, arg);
+  ip_addr = CAR(arg);
+  port    = CDR(arg);
+  if (!is_kind_of(ip_addr, consts.cl.string))  error(ERR_INVALID_ARG, arg);
+  if (!is_kind_of(port, consts.cl.integer))    error(ERR_INVALID_ARG, arg);
 
-    string_tocstr(1, ipaddr);
-
-    memset(&sockaddr, 0, sizeof(sockaddr));
-    sockaddr.sin_family = AF_INET;
-    inet_aton(STRING(R1)->data, &sockaddr.sin_addr);
-    sockaddr.sin_port   = htons(INTEGER(port)->val);
-    rc = bind(SOCKET(recvr)->fd, (const struct sockaddr *) &sockaddr, sizeof(sockaddr));
-
-    ASSERT(rc == 0);
-
-    vm_pop(1);
-
-    vm_assign(0, recvr);
+  string_tocstr(ipaddr);
+  
+  memset(&sockaddr, 0, sizeof(sockaddr));
+  sockaddr.sin_family = AF_INET;
+  inet_aton(STRING(R0)->data, &sockaddr.sin_addr);
+  sockaddr.sin_port   = htons(INTEGER(port)->val);
+  rc = bind(SOCKET(recvr)->fd, (const struct sockaddr *) &sockaddr, sizeof(sockaddr));
+  
+  ASSERT(rc == 0);
+  
+  vm_assign(0, recvr);
 }
 
 void

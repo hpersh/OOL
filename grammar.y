@@ -40,7 +40,7 @@ decnum:
     long long val = 0;
 
     sscanf(yytext, "%lld", &val);
-    integer_new(0, val);
+    integer_new(val);
 
     vm_push(0);                /* Just for keeping a reference while parsing */
     $$ = R0;
@@ -53,7 +53,7 @@ hexnum:
     long long val = 0;
 
     sscanf(yytext, "%llx", &val);
-    integer_new(0, val);
+    integer_new(val);
 
     vm_push(0);
     $$ = R0;
@@ -66,7 +66,7 @@ floatnum:
     long double val = 0;
 
     sscanf(yytext, "%Lf", &val);
-    float_new(0, val);
+    float_new(val);
 
     vm_push(0);
     $$ = R0;
@@ -76,7 +76,7 @@ floatnum:
 csym:
         TOK_CSYM
 {
-    string_new(0, 1, yyleng, yytext);
+    string_new(1, yyleng, yytext);
 
     vm_push(0);
     $$ = R0;
@@ -115,14 +115,15 @@ qstr:
         --size;
     }
 
-    vm_pushm(1, 2);
+    vm_push(1);
 
-    string_new(1, 1, size, yytext + 1);
-    cons(2, consts.cl.list, consts.str.quote, NIL);
-    cons(1, consts.cl.list, R1, R2);
-    method_call_new(0, R1);
+    cons(consts.cl.list, consts.str.quote, NIL);
+    vm_assign(1, R0);
+    string_new(1, size, yytext + 1);
+    cons(consts.cl.list, R0, R1);
+    method_call_new(R0);
 
-    vm_popm(1, 2);
+    vm_pop(1);
 
     vm_push(0);
     $$ = R0;
@@ -132,7 +133,7 @@ qstr:
 sym:
         TOK_SYM
 {
-    string_new(0, 1, yyleng, yytext);
+    string_new(1, yyleng, yytext);
 
     vm_push(0);
     $$ = R0;
@@ -145,33 +146,35 @@ dsym:
     unsigned k, n;
     char     *p, *q;
 
-    vm_pushm(1, 4);
+    vm_pushm(1, 2);
 
     for (k = 0, p = yytext;; p = q + 1, ++k) {
 	q = index(p, '.');
 	n = q ? q - p : strlen(p);
 
-	string_new(4, 1, n, p);
+	string_new(1, n, p);
 
 	if (k == 0) {
-	    vm_assign(1, R4);
+	    vm_assign(1, R0);
 	    continue;
 	}
 	
-	cons(3, consts.cl.list, consts.str.quote, NIL);
-	cons(3, consts.cl.list, R4, R3);
-	method_call_new(2, R3);
-	cons(3, consts.cl.list, R2, NIL);
-	cons(3, consts.cl.list, consts.str.atc, R3);
-	cons(2, consts.cl.list, R1, R3);
-	method_call_new(1, R2);
+	vm_assign(2, R0);
+	cons(consts.cl.list, consts.str.quote, NIL);
+	cons(consts.cl.list, R2, R0);
+	method_call_new(R0);
+	cons(consts.cl.list, R0, NIL);
+	cons(consts.cl.list, consts.str.atc, R0);
+	cons(consts.cl.list, R1, R0);
+	method_call_new(R0);
+	vm_assign(1, R0);
 
 	if (q == 0)  break;
     }
 	
     vm_assign(0, R1);
     
-    vm_popm(1, 4);
+    vm_popm(1, 2);
 
     vm_push(0);
     $$ = R0;
@@ -181,7 +184,7 @@ dsym:
 seln:
         TOK_SELN
 {
-    string_new(0, 1, yyleng, yytext);
+    string_new(1, yyleng, yytext);
 
     vm_push(0);
     $$ = R0;
@@ -243,7 +246,7 @@ atom:
 pair:
 	TOK_LPAREN expr TOK_COMMA expr TOK_RPAREN
 {
-    cons(0, consts.cl.pair, $2, $4);
+    cons(consts.cl.pair, $2, $4);
 
     vm_push(0);
     $$ = R0;
@@ -262,7 +265,7 @@ list_exprs_1:
 }
         | expr
 {
-    cons(0, consts.cl.list, $1, NIL);
+    cons(consts.cl.list, $1, NIL);
 
     vm_push(0);
     $$ = R0;
@@ -290,26 +293,18 @@ method_call_sel_and_args:
 {
     obj_t p, q;
 
-    vm_pushm(1, 2);
-
-    cons(2, consts.cl.list, $3, NIL);
-    cons(1, consts.cl.list, $2, R2);
-    _list_concat($1, R1);
+    cons(consts.cl.list, $3, NIL);
+    cons(consts.cl.list, $2, R0);
+    _list_concat($1, R0);
     vm_assign(0, $1);
-
-    vm_popm(1, 2);
 
     vm_push(0);
     $$ = R0;
 }
         | seln expr
 {
-    vm_push(1);
-
-    cons(1, consts.cl.list, $2, NIL);
-    cons(0, consts.cl.list, $1, R1);
-
-    vm_pop(1);
+    cons(consts.cl.list, $2, NIL);
+    cons(consts.cl.list, $1, R0);
 
     vm_push(0);
     $$ = R0;
@@ -326,83 +321,77 @@ method_call:
 }
 	| TOK_LSQBR sym TOK_CEQUAL expr TOK_RSQBR
 {
-    vm_pushm(1, 2);
+  vm_push(1);
 
-    cons(1, consts.cl.list, $4, NIL);
-    string_new(2, 1, 4, "put:");
-    cons(1, consts.cl.list, R2, R1);
-    cons(2, consts.cl.list, consts.str.quote, NIL);
-    cons(2, consts.cl.list, $2, R2);
-    method_call_new(3, R2);
-    cons(1, consts.cl.list, R3, R1);
-    string_new(2, 1, 4, "new:");
-    cons(1, consts.cl.list, R2, R1);
-    cons(1, consts.cl.list, consts.str.Environment, R1);
-    method_call_new(0, R1);
+  cons(consts.cl.list, $4, NIL);
+  vm_assign(1, R0);
+  string_new(1, 4, "put:");
+  cons(consts.cl.list, R0, R1);
+  vm_assign(1, R0);
+  cons(consts.cl.list, consts.str.quote, NIL);
+  cons(consts.cl.list, $2, R0);
+  method_call_new(R0);
+  cons(consts.cl.list, R0, R1);
+  vm_assign(1, R0);
+  string_new(1, 4, "new:");
+  cons(consts.cl.list, R0, R1);
+  cons(consts.cl.list, consts.str.Environment, R0);
+  method_call_new(R0);
 
-    vm_popm(1, 2);
+  vm_pop(1);
     
-    vm_push(0);
-    $$ = R0;
+  vm_push(0);
+  $$ = R0;
 }
 	| TOK_LSQBR sym TOK_EQUAL expr TOK_RSQBR
 {
-    vm_pushm(1, 2);
+  vm_push(1);
 
-    cons(1, consts.cl.list, $4, NIL);
-    string_new(2, 1, 4, "put:");
-    cons(1, consts.cl.list, R2, R1);
-    cons(2, consts.cl.list, consts.str.quote, NIL);
-    cons(2, consts.cl.list, $2, R2);
-    method_call_new(3, R2);
-    cons(1, consts.cl.list, R3, R1);
-    string_new(2, 1, 3, "at:");
-    cons(1, consts.cl.list, R2, R1);
-    cons(1, consts.cl.list, consts.str.Environment, R1);
-    method_call_new(0, R1);
+  cons(consts.cl.list, $4, NIL);
+  vm_assign(1, R0);
+  string_new(1, 4, "put:");
+  cons(consts.cl.list, R0, R1);
+  vm_assign(1, R0);
+  cons(consts.cl.list, consts.str.quote, NIL);
+  cons(consts.cl.list, $2, R0);
+  method_call_new(R0);
+  cons(consts.cl.list, R0, R1);
+  vm_assign(1, R0);
+  string_new(1, 4, "at:");
+  cons(consts.cl.list, R0, R1);
+  cons(consts.cl.list, consts.str.Environment, R0);
+  method_call_new(R0);
 
-    vm_popm(1, 2);
+  vm_pop(1);
     
-    vm_push(0);
-    $$ = R0;
+  vm_push(0);
+  $$ = R0;
 }
         | TOK_LSQBR expr sym TOK_RSQBR
 {
-    vm_pushm(1, 2);
-    
-    cons(2, consts.cl.list, $3, NIL);
-    cons(1, consts.cl.list, $2, R2);
-    method_call_new(0, R1);
+  cons(consts.cl.list, $3, NIL);
+  cons(consts.cl.list, $2, R0);
+  method_call_new(R0);
 
-    vm_popm(1, 2);
-
-    vm_push(0);
-    $$ = R0;
+  vm_push(0);
+  $$ = R0;
 }
         | TOK_LSQBR expr csym TOK_RSQBR
 {
-    vm_pushm(1, 2);
-    
-    cons(2, consts.cl.list, $3, NIL);
-    cons(1, consts.cl.list, $2, R2);
-    method_call_new(0, R1);
+  cons(consts.cl.list, $3, NIL);
+  cons(consts.cl.list, $2, R0);
+  method_call_new(R0);
 
-    vm_popm(1, 2);
-
-    vm_push(0);
-    $$ = R0;
+  vm_push(0);
+  $$ = R0;
 }
         | TOK_LSQBR expr method_call_sel_and_args TOK_RSQBR
 {
-    vm_push(1);
+  cons(consts.cl.list, $2, $3);
+  method_call_new(R0);
 
-    cons(1, consts.cl.list, $2, $3);
-    method_call_new(0, R1);
-
-    vm_pop(1);
-
-    vm_push(0);
-    $$ = R0;
+  vm_push(0);
+  $$ = R0;
 }
         ;
 
@@ -418,7 +407,7 @@ block_args_1:
 }
         | sym
 {
-    cons(0, consts.cl.list, $1, NIL);
+    cons(consts.cl.list, $1, NIL);
 
     vm_push(0);
     $$ = R0;
@@ -453,7 +442,7 @@ block_body_1:
 }
         | expr
 {
-    cons(0, consts.cl.list, $1, NIL);
+    cons(consts.cl.list, $1, NIL);
 
     vm_push(0);
     $$ = R0;
@@ -479,12 +468,8 @@ block_body:
 block:
         TOK_LBRACE block_args block_body TOK_RBRACE
 {
-    vm_push(1);
-
-    cons(1, consts.cl.list, $2, $3);
-    block_new(0, R1);
-
-    vm_pop(1);
+    cons(consts.cl.list, $2, $3);
+    block_new(R0);
 
     vm_push(0);
     $$ = R0;
@@ -529,13 +514,9 @@ expr:
 }
         | TOK_QUOTE expr
 {
-    vm_pushm(1, 2);
-
-    cons(2, consts.cl.list, consts.str.quote, NIL);
-    cons(1, consts.cl.list, $2, R2);
-    method_call_new(0, R1);
-
-    vm_popm(1, 2);
+    cons(consts.cl.list, consts.str.quote, NIL);
+    cons(consts.cl.list, $2, R0);
+    method_call_new(R0);
     
     vm_push(0);
     $$ = R0;

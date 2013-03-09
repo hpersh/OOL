@@ -1,3 +1,4 @@
+#include <setjmp.h>
 #include <stdio.h>
 
 struct list {
@@ -38,8 +39,8 @@ struct inst_metaclass {
 #define CLASS(obj)      ((struct inst_metaclass *)(obj))
 
 struct inst_code_method {
-    struct obj base;
-    void       (*func)(unsigned argc);
+  struct obj base;
+  void       (*func)(unsigned argc, obj_t args);
 };
 #define CODE_METHOD(obj) ((struct inst_code_method *)(obj))
 
@@ -49,15 +50,23 @@ struct inst_boolean {
 };
 #define BOOLEAN(obj)  ((struct inst_boolean *)(obj))
 
+typedef long long          integer_val_t;
+typedef unsigned long long uinteger_val_t;
+#define INTEGER_FMT_DEC  "%lld"
+#define INTEGER_FMT_OCT  "%llo"
+#define INTEGER_FMT_HEX  "%llx"
 struct inst_integer {
-  struct obj base;
-  long long  val;
+  struct obj    base;
+  integer_val_t val;
 };
 #define INTEGER(obj)  ((struct inst_integer *)(obj))
 
+typedef long double float_val_t;
+#define FLOAT_FMT_SCAN   "%Lf"
+#define FLOAT_FMT_PRINT  "%Lg"
 struct inst_float {
-    struct obj  base;
-    long double val;
+  struct obj  base;
+  float_val_t val;
 };
 #define FLOAT(obj)  ((struct inst_float *)(obj))
 
@@ -103,10 +112,10 @@ struct inst_dict {
 #define DICT(obj)  ((struct inst_dict *)(obj))
 
 struct inst_file {
-    struct obj base;
-    obj_t      filename;
-    obj_t      mode;
-    FILE       *fp;
+  struct obj base;
+  obj_t      filename;
+  obj_t      mode;
+  FILE       *fp;
 };
 #define _FILE(obj)  ((struct inst_file *)(obj))
 
@@ -139,6 +148,8 @@ enum errcode {
     ERR_INVALID_VALUE_1,
     ERR_INVALID_VALUE_2,
     ERR_NUM_ARGS,
+    ERR_IDX_RANGE,
+    ERR_IDX_RANGE_2,
     ERR_BREAK,
     ERR_CONT,
     ERR_RETURN,
@@ -146,6 +157,7 @@ enum errcode {
     ERR_CONST,
     ERR_MODULE_LOAD,
     ERR_MODULE_MEMBER,
+    ERR_BAD_FORM,
     ERR_OVF
 };
 
@@ -172,7 +184,6 @@ obj_t obj_retain(obj_t);
 void  obj_release(obj_t);
 
 void vm_assign(unsigned dst, obj_t val);
-void vm_inst_alloc(unsigned dst, obj_t cl);
 void vm_pushl(obj_t obj);
 void vm_push(unsigned src);
 void vm_pushm(unsigned src, unsigned n);
@@ -188,44 +199,36 @@ void inst_free_parent(obj_t cl, obj_t inst);
 void cl_inst_init(obj_t cl, obj_t inst, va_list ap);
 void cl_inst_walk(obj_t cl, obj_t inst, void (*func)(obj_t));
 void cl_inst_free(obj_t cl, obj_t inst);
+
+void m_inst_alloc(obj_t cl);
 void inst_init(obj_t recvr, ...);
 
-struct mc_frame {
-    struct mc_frame *prev;
-    obj_t           cl, sel, args;
-    obj_t           module_prev;
-} *mcfp;
-
-#define MC_FRAME_SEL       (mcfp->sel)
-#define MC_FRAME_ARGS      (mcfp->args)
-#define MC_FRAME_RECVR     (CAR(MC_FRAME_ARGS))
-#define MC_FRAME_ARG_0     (CAR(CDR(MC_FRAME_ARGS)))
-#define MC_FRAME_ARG_1     (CAR(CDR(CDR(MC_FRAME_ARGS))))
-#define MC_FRAME_ARG_2     (CAR(CDR(CDR(CDR(MC_FRAME_ARGS)))))
-
-void code_method_new(unsigned dst, void (*func)(unsigned));
-void boolean_new(unsigned dst, unsigned val);
-void integer_new(unsigned dst, long long val);
-void float_new(unsigned dst, long double val);
-void string_new(unsigned dst, unsigned n, ...);
+void m_code_method_new(void (*func)(unsigned, obj_t));
+void m_boolean_new(unsigned val);
+void m_integer_new(long long val);
+void m_float_new(long double val);
+void m_string_new(unsigned n, ...);
 unsigned string_hash(obj_t s);
 unsigned string_equal(obj_t s1, obj_t s2);
-void string_tocstr(unsigned dst, obj_t s);
-void cons(unsigned dst, obj_t cl, obj_t car, obj_t cdr);
+void m_string_tocstr(obj_t s);
+void m_cons(obj_t cl, obj_t car, obj_t cdr);
 void _list_concat(obj_t li, obj_t obj);
-void list_concat(obj_t li, obj_t obj);
-void method_call_new(unsigned dst, obj_t list);
-void block_new(unsigned dst, obj_t list);
-void array_new(unsigned dst, unsigned size);
-void _dict_new(unsigned dst, unsigned size, unsigned (*hash_func)(obj_t), unsigned (*equal_func)(obj_t, obj_t));
-void string_dict_new(unsigned dst, unsigned size);
-void dict_new(unsigned dst, unsigned size);
-void class_new(unsigned dst, obj_t name, obj_t parent, unsigned inst_size,
-	       inst_init_t _inst_init, inst_walk_t _inst_walk, inst_free_t _inst_free
-	       );
+void m_list_concat(obj_t li, obj_t obj);
+void m_method_call_new(obj_t list);
+void m_block_new(obj_t list);
+void m_array_new(unsigned size);
+void m_string_dict_new(unsigned size);
+void m_dict_new(unsigned size);
+void m_class_new(obj_t name, obj_t parent, unsigned inst_size,
+		 inst_init_t _inst_init, inst_walk_t _inst_walk, inst_free_t _inst_free
+		 );
+
+void m_method_call_1(obj_t sel, obj_t recvr);
+void m_method_call_2(obj_t sel, obj_t recvr, obj_t arg1);
+void m_method_call_3(obj_t sel, obj_t recvr, obj_t arg1, obj_t arg2);
 
 obj_t env_at(obj_t s);
-obj_t env_new_put(obj_t s, obj_t val);
+void  env_new_put(obj_t s, obj_t val);
 void  env_at_put(obj_t s, obj_t val);
 void  env_del(obj_t s);
 
@@ -381,9 +384,9 @@ struct init_str {
 };
 
 struct init_method {
-    obj_t *pcl;
-    obj_t *psel;
-    void (*func)(unsigned);
+  obj_t *pcl;
+  obj_t *psel;
+  void  (*func)(unsigned, obj_t);
 };
 
 struct init_inst_var {
@@ -398,4 +401,64 @@ void init_cl_methods(const struct init_method *tbl, unsigned n);
 void init_inst_methods(const struct init_method *tbl, unsigned n);
 void init_inst_vars(const struct init_inst_var *tbl, unsigned n);
 void root_add(struct root_hdr *hdr, unsigned size);
+
+
+struct frame {
+    struct frame *prev;
+    enum frame_type {
+	FRAME_TYPE_RESTART,	/* For restarting, after error */
+	FRAME_TYPE_INPUT,	/* Input stream */
+	FRAME_TYPE_METHOD_CALL,	/* Calling a method */
+	FRAME_TYPE_WHILE,	/* Running a "while" */
+	FRAME_TYPE_BLOCK,	/* Running a block */
+	FRAME_TYPE_MODULE	/* Adding/running a module */
+    } type;
+};
+
+struct frame_jmp {
+    struct frame base;
+    obj_t        *sp;		/* Recorded top of stack */
+    jmp_buf      jmp_buf;	/* For longjmp() */
+};
+#define FRAME_JMP(x)  ((struct frame_jmp *)(x))
+
+struct frame_input {
+  struct frame       base;
+  obj_t              file;
+  unsigned           line;
+  struct frame_input *prev;
+  void               *yybs_prev;
+};
+#define FRAME_INPUT(x)  ((struct frame_input *)(x))
+
+struct frame_method_call {
+    struct frame base;
+    obj_t        cl;
+    obj_t        sel;
+    obj_t        args;
+};
+#define FRAME_METHOD_CALL(x)  ((struct frame_method_call *)(x))
+
+struct frame_block {
+    struct frame_jmp base;
+    obj_t            dict;
+};
+#define FRAME_BLOCK(x)  ((struct frame_block *)(x))
+
+struct frame_module {
+  struct frame base;
+  obj_t        module;
+  obj_t        module_prev;
+};
+#define FRAME_MODULE(x)  ((struct frame_module *)(x))
+
+obj_t module_cur;
+
+void     *yy_inp_push_file(obj_t file);
+void     *yy_inp_push_str(obj_t str);
+void     yy_inp_pop(void * cookie);
+obj_t    yy_inp_file(void * cookie);
+unsigned yy_inp_line(void * cookie);
+
+int  yyparse();
 

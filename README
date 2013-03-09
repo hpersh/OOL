@@ -1,5 +1,7 @@
 * TODO
 
+- expose alists?
+- goto for blocks?
 - need to distinguish current module to add to vs. current module running (i.e. method running -> class -> module)
 - unify frame scheme; subsume scanner buffers, modules,whiles, blocks, method_calls
 - short cut for "super": [<recvr> super: <sel> eval: <args>] => [[[[[[<recvr> instance-of] parent] instance-methods] at: <sel>] cdr] eval: <args>]

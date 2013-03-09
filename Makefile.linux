@@ -1,7 +1,8 @@
 CFLAGS	= -g -DDEBUG
 CC      = gcc $(CFLAGS)
 
-all: ool socket.so math.so
+#all: ool socket.so math.so
+all: ool
 
 ool: scanner.l grammar.y ool.c
 	bison -d -t grammar.y
