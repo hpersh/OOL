@@ -13,7 +13,7 @@ struct obj {
     struct list list_node;
     obj_t       inst_of;
     unsigned    ref_cnt;
-#ifdef DEBUG
+#ifndef NDEBUG
     unsigned    old_ref_cnt;
 #endif
 };
@@ -36,13 +36,13 @@ struct inst_metaclass {
     inst_walk_t inst_walk;
     inst_free_t inst_free;
 };
-#define CLASS(obj)      ((struct inst_metaclass *)(obj))
+#define CLASS(obj)  ((struct inst_metaclass *)(obj))
 
 struct inst_code_method {
   struct obj base;
   void       (*func)(unsigned argc, obj_t args);
 };
-#define CODE_METHOD(obj) ((struct inst_code_method *)(obj))
+#define CODE_METHOD(obj)  ((struct inst_code_method *)(obj))
 
 struct inst_boolean {
   struct obj    base;
@@ -120,12 +120,11 @@ struct inst_file {
 #define _FILE(obj)  ((struct inst_file *)(obj))
 
 struct inst_module {
-    struct obj base;
-    obj_t      name;
-    obj_t      parent;
-    obj_t      dict;
-    obj_t      filename;	/* NIL <=> Main (top-level module) */
-    void       *ptr;		/* NIL <=> Not loaded from dynamic lib */
+    struct inst_dict base;
+    obj_t            name;
+    obj_t            parent;
+    obj_t            filename;	/* NIL <=> Main (top-level module) */
+    void             *ptr;      /* NIL <=> Not loaded from dynamic lib */
 };
 #define MODULE(obj)  ((struct inst_module *)(obj))
 
@@ -211,7 +210,8 @@ void m_string_new(unsigned n, ...);
 unsigned string_hash(obj_t s);
 unsigned string_equal(obj_t s1, obj_t s2);
 void m_string_tocstr(obj_t s);
-void m_cons(obj_t cl, obj_t car, obj_t cdr);
+void m_pair_new(obj_t car, obj_t cdr);
+void m_cons(obj_t car, obj_t cdr);
 void _list_concat(obj_t li, obj_t obj);
 void m_list_concat(obj_t li, obj_t obj);
 void m_method_call_new(obj_t list);
@@ -238,131 +238,134 @@ struct root_hdr {
 };
 
 struct consts {
-    struct root_hdr hdr;
-    struct  {
-        obj_t metaclass;
-        obj_t object;
-        obj_t code_method;
-        obj_t boolean;
-        obj_t integer;
-	obj_t _float;
-        obj_t string;
-	obj_t dptr;
-        obj_t pair;
-	obj_t list;
-        obj_t method_call;
-        obj_t block;
-        obj_t array;
-        obj_t dict;
-        obj_t file;
-        obj_t module;
-        obj_t env;
-        obj_t system;
-    } cl;
-    struct {
-        obj_t Array;
-        obj_t Block;
-        obj_t Boolean;
-        obj_t Code_Method;
-        obj_t Dictionary;
-	obj_t Dptr;
-        obj_t Environment;
-        obj_t File;
-	obj_t Float;
-        obj_t Integer;
-	obj_t List;
-        obj_t Metaclass;
-        obj_t Method_Call;
-        obj_t Module;
-        obj_t Object;
-        obj_t Pair;
-        obj_t String;
-        obj_t System;
-        obj_t addc;
-        obj_t andc;
-        obj_t appendc;
-	obj_t asc;
-        obj_t atc;
-	obj_t atc_lengthc;
-        obj_t atc_putc;
-	obj_t _break;
-        obj_t car;
-        obj_t cdr;
-	obj_t chr;
-        obj_t class_methods;
-        obj_t class_variables;
-	obj_t _continue;
-        obj_t deletec;
-	obj_t divc;
-        obj_t equalsc;
-        obj_t eval;
-        obj_t evalc;
-        obj_t exit;
-        obj_t exitc;
-        obj_t _false;
-	obj_t filterc;
-        obj_t foreachc;
-	obj_t gec;
-	obj_t gtc;
-        obj_t hash;
-        obj_t hex;
-        obj_t ifc;
-        obj_t ifc_elsec;
-	obj_t indexc;
-        obj_t instance_methods;
-        obj_t instance_variables;
-        obj_t instanceof;
-        obj_t keys;
-	obj_t lec;
-	obj_t length;
-	obj_t load;
-	obj_t ltc;
-	obj_t main;
-        obj_t mapc;
-	obj_t minus;
-	obj_t modc;
-	obj_t mode;
-        obj_t multc;
-        obj_t name;
-        obj_t new;
-        obj_t newc;
-	obj_t newc_modec;
-	obj_t newc_parentc_instance_variablesc;
-        obj_t newc_putc;
-        obj_t nil;
-        obj_t not;
-	obj_t orc;
-        obj_t parent;
-	obj_t path;
-	obj_t pquote;
-        obj_t print;
-        obj_t printc;
-        obj_t quote;
-        obj_t range;
-        obj_t rangec;
-	obj_t rangec_stepc;
-        obj_t readc;
-        obj_t readln;
-	obj_t reducec_initc;
-	obj_t _return;
-	obj_t rindexc;
-	obj_t splicec;
-	obj_t splitc;
-	obj_t _stderr;
-	obj_t _stdin;
-	obj_t _stdout;
-	obj_t subc;
-        obj_t subclassc_instance_variablesc;
-        obj_t tostring;
-        obj_t tostringc;
-        obj_t _true;
-	obj_t whilec;
-	obj_t xorc;
-        
-#ifdef DEBUG
-        obj_t assert;
-        obj_t collect;
-        obj_t debugc;
+  struct root_hdr hdr;
+  struct {
+    obj_t _false, _true;
+  } bool;
+  struct  {
+    obj_t metaclass;
+    obj_t object;
+    obj_t code_method;
+    obj_t boolean;
+    obj_t integer;
+    obj_t _float;
+    obj_t string;
+    obj_t dptr;
+    obj_t pair;
+    obj_t list;
+    obj_t method_call;
+    obj_t block;
+    obj_t array;
+    obj_t dict;
+    obj_t file;
+    obj_t module;
+    obj_t env;
+    obj_t system;
+  } cl;
+  struct {
+    obj_t Array;
+    obj_t Block;
+    obj_t Boolean;
+    obj_t Code_Method;
+    obj_t Dictionary;
+    obj_t Dptr;
+    obj_t Environment;
+    obj_t File;
+    obj_t Float;
+    obj_t Integer;
+    obj_t List;
+    obj_t Metaclass;
+    obj_t Method_Call;
+    obj_t Module;
+    obj_t Object;
+    obj_t Pair;
+    obj_t String;
+    obj_t System;
+    obj_t addc;
+    obj_t andc;
+    obj_t appendc;
+    obj_t asc;
+    obj_t atc;
+    obj_t atc_lengthc;
+    obj_t atc_putc;
+    obj_t _break;
+    obj_t car;
+    obj_t cdr;
+    obj_t chr;
+    obj_t class_methods;
+    obj_t class_variables;
+    obj_t _continue;
+    obj_t deletec;
+    obj_t divc;
+    obj_t equalsc;
+    obj_t eval;
+    obj_t evalc;
+    obj_t exit;
+    obj_t exitc;
+    obj_t _false;
+    obj_t filterc;
+    obj_t foreachc;
+    obj_t gec;
+    obj_t gtc;
+    obj_t hash;
+    obj_t hex;
+    obj_t ifc;
+    obj_t ifc_elsec;
+    obj_t indexc;
+    obj_t instance_methods;
+    obj_t instance_variables;
+    obj_t instanceof;
+    obj_t keys;
+    obj_t lec;
+    obj_t length;
+    obj_t load;
+    obj_t ltc;
+    obj_t main;
+    obj_t mapc;
+    obj_t minus;
+    obj_t modc;
+    obj_t mode;
+    obj_t multc;
+    obj_t name;
+    obj_t new;
+    obj_t newc;
+    obj_t newc_modec;
+    obj_t newc_parentc_instance_variablesc;
+    obj_t newc_putc;
+    obj_t nil;
+    obj_t not;
+    obj_t orc;
+    obj_t parent;
+    obj_t path;
+    obj_t pquote;
+    obj_t print;
+    obj_t printc;
+    obj_t quote;
+    obj_t range;
+    obj_t rangec;
+    obj_t rangec_stepc;
+    obj_t readc;
+    obj_t readln;
+    obj_t reducec_initc;
+    obj_t _return;
+    obj_t rindexc;
+    obj_t splicec;
+    obj_t splitc;
+    obj_t _stderr;
+    obj_t _stdin;
+    obj_t _stdout;
+    obj_t subc;
+    obj_t subclassc_instance_variablesc;
+    obj_t tostring;
+    obj_t tostringc;
+    obj_t _true;
+    obj_t whilec;
+    obj_t xorc;
+    
+#ifndef NDEBUG
+    obj_t assert;
+    obj_t collect;
+    obj_t debugc;
 #endif
     } str;
 } consts;

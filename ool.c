@@ -10,16 +10,24 @@
 
 #include "ool.h"
 
-#define ASSERT       assert
 #define HARD_ASSERT  assert
+#ifndef NDEBUG
+#define ASSERT       assert
+#else
+#define ASSERT(x)
+#endif
 
 #define ARRAY_SIZE(a)  (sizeof(a) / sizeof((a)[0]))
 
-#define PTR_AS_INT                        int
-#define FIELD_OFS(s, f)                   ((PTR_AS_INT) &((s *) 0)->f)
+#if 1
+#define PTR_AS_INT(x)                     ((long long)(x))
+#else
+#define PTR_AS_INT(x)                     ((int)(x))
+#endif
+#define FIELD_OFS(s, f)                   PTR_AS_INT(&((s *) 0)->f)
 #define FIELD_PTR_TO_STRUCT_PTR(p, s, f)  ((s *)((char *)(p) - FIELD_OFS(s, f)))
 
-#ifdef DEBUG
+#ifndef NDEBUG
 struct {
     unsigned vm    : 1;
     unsigned mem   : 1;
@@ -62,7 +70,7 @@ vm_xxx - VM function
        - Do not use scratch registers
        - Examples: vm_push(reg)
 
-m_xxx  - Helper functions for methods
+m_xxx  - method functions
        - void C type, regular C arguments
        - Return value in R0, if any
        - May use scratch registers, which are saved and restored
@@ -71,7 +79,7 @@ m_xxx  - Helper functions for methods
              another m_xxx function, or if a value will be returned in R0, R0 must be saved on entry
        - GENERAL RULE: An m_xxx function must save R0, and either drop it (if returning in R0), or restore it (if not returning in R0)
 
-cm_xxx - Code_Method
+cm_xxx - Code_Method functions
        - Same as m_xxx, except that args are standard, and guaranteed to be on the stack
        => Do not need to save any registers, except those used for scratch, as framework
           has placed arguments on the stack
@@ -273,7 +281,7 @@ mem_init(void)
 void collect();
 unsigned initf;
 
-#ifdef DEBUG
+#ifndef NDEBUG
 
 struct {
     struct {
@@ -289,7 +297,6 @@ struct {
         unsigned stack_depth_max;
     } vm;
 } stats;
-
 
 #define PRINT_VAR(x, f)  printf(#x "\t= " f "\n", x)
 
@@ -335,7 +342,7 @@ stack_dump(void)
     printf("Stack dump:\n");
     for (p = sp; p < stack_end; ++p) {
 	printf("%p: ", *p);
-	vm_method_call_1(consts.str.print, *p);
+	m_method_call_1(consts.str.print, *p);
 	printf("\n");
     }
 
@@ -369,7 +376,7 @@ cmalloc(unsigned size)
 
     if (!initf)  ++alloc_cnt;
 
-#ifdef DEBUG
+#ifndef NDEBUG
     ++stats.mem.alloc_cnt;
     stats.mem.bytes_alloced += size;
     stats.mem.bytes_in_use += size;
@@ -386,7 +393,7 @@ _cfree(void *p, unsigned size)
 {
     if (p == 0)  return;
 
-#ifdef DEBUG
+#ifndef NDEBUG
     ++stats.mem.free_cnt;
     stats.mem.bytes_freed += size;
     stats.mem.bytes_in_use -= size;
@@ -520,7 +527,7 @@ root_mark(void)
         for (p = LIST_FIRST(OBJ_LIST_ACTIVE); p != LIST_END(OBJ_LIST_ACTIVE); p = p->next) {
             obj_t q = FIELD_PTR_TO_STRUCT_PTR(p, struct obj, list_node);
             
-#ifdef DEBUG
+#ifndef NDEBUG
 	    q->old_ref_cnt = q->ref_cnt;
 #endif
             q->ref_cnt = 0;
@@ -533,7 +540,7 @@ root_mark(void)
 
     root_walk(obj_mark);
 
-#ifdef DEBUG
+#ifndef NDEBUG
     /* Consistency checking */
     {
         struct list *p;
@@ -556,7 +563,7 @@ root_mark(void)
 void
 collect(void)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
     if (debug.mem) {
         printf("collect(): Starting...\n");
         mem_stats_print();
@@ -582,7 +589,7 @@ collect(void)
 
     collectingf = 0;
 
-#ifdef DEBUG
+#ifndef NDEBUG
     if (debug.mem) {
         printf("collect(): done\n");
         mem_stats_print();
@@ -642,7 +649,7 @@ Symbol resolution:
   do { FRAME_POP; } while (0)
 
 #define FRAME_WHILE_END  \
-    FRAME_WHILE_POP;
+  FRAME_WHILE_POP;	 \
   }
 
 #define FRAME_INPUT_BEGIN(fi) {				\
@@ -670,7 +677,7 @@ Symbol resolution:
   do { FRAME_POP; } while (0)
 
 #define FRAME_METHOD_CALL_END \
-    FRAME_METHOD_CALL_POP;
+  FRAME_METHOD_CALL_POP;      \
   }
 
 #define FRAME_BLOCK_BEGIN(d) {						\
@@ -697,7 +704,7 @@ Symbol resolution:
   do { module_cur = frp->module_prev;  FRAME_POP; } while (0)
 
 #define FRAME_MODULE_END			\
-    FRAME_MODULE_POP;
+  FRAME_MODULE_POP;				\
   }
 
 struct frame *frp;
@@ -706,8 +713,6 @@ obj_t        module_main;
 void
 frame_goto(enum frame_type type, int longjmp_arg)
 {
-    struct frame *p;
-
     switch (type) {
     case FRAME_TYPE_RESTART:
     case FRAME_TYPE_WHILE:
@@ -755,74 +760,25 @@ enum { WHILE_ARG_CONT = 1, WHILE_ARG_BREAK };
 #define WHILE_CONT   (frame_goto(FRAME_TYPE_WHILE, WHILE_ARG_CONT))
 #define WHILE_BREAK  (frame_goto(FRAME_TYPE_WHILE, WHILE_ARG_BREAK))
 
-
-
-
-
-void
-env_find(obj_t s, obj_t *pp, obj_t *pdict)
-{
-  struct frame *p;
-
-  if (!is_kind_of(s, consts.cl.string))  error(ERR_INVALID_ARG, s);
-  
-  for (p = frp; p; p = p->prev) {
-    if (p->type == FRAME_TYPE_BLOCK) {
-      
-    }
-  }
-}
-
-
-
-void
-env_find(obj_t s, obj_t *pr, obj_t *dn)
-{
-    struct frame *p;
-    obj_t r = NIL, dd = NIL, d, mm = NIL;
-
-    if (!is_kind_of(s, consts.cl.string))  error(ERR_INVALID_ARG, s);
-
-    for (p = frp; p; p = p->prev) {
-      switch (p->type) {
-      case FRAME_TYPE_BLOCK:
-	d = FRAME_BLOCK(p)->dict;
-	break;
-      case FRAME_TYPE_MODULE:
-	if (mm == NIL)  mm = FRAME_MODULE(p)->module;
-	d = MODULE(m)->dict;
-	break;
-      default:
-	continue;
-      }
-
-      if (dd == NIL)  dd = d;
-      if (pr == 0
-	  ||(p->type == FRAME_TYPE_BLOCK) && (r = dict_at(d, s))
-	  )  goto done;
-    }
-
-    for ( ; mm; mm = MODULE(mm)->parent) {
-      if (r = dict_at(MODULE(mm)->dict, s))  break;
-    }
-    
- done:
-    if (pr)  *pr = r;
-    if (dn)  *dn = dd;
-
-    return;
-}
-
-
 obj_t
 env_at(obj_t s)
 {
-  obj_t pr;
+  struct frame *p;
 
-  env_find(s, &pr, 0);
-  if (pr == NIL)  error(ERR_SYM_NOT_BOUND, s);
+  for (p = frp; p; p = p->prev) {
+    switch (p->type) {
+    case FRAME_TYPE_BLOCK:
+      break;
+    case FRAME_TYPE_MODULE:
+      break;
+    default:
+      ;
+    }
+  }
 
-  return (CDR(pr));
+  error(ERR_SYM_NOT_BOUND, s);
+
+  return (NIL);
 }
 
 void
@@ -866,7 +822,7 @@ vm_assign(unsigned dst, obj_t val)
     OBJ_ASSIGN(regs[dst], val);
 }
 
-#ifdef DEBUG
+#ifndef NDEBUG
 
 #define VM_STATS_UPDATE_PUSH(n) \
     do {								\
@@ -884,7 +840,7 @@ vm_assign(unsigned dst, obj_t val)
 
 #endif
 
-#define VM_STACK_CHK_DN(n)  do { if ((sp - (n)) < stack)      fatal(FATAL_ERR_STACK_OVERFLOW); } while (0)
+#define VM_STACK_CHK_DN(n)  do { if ((sp - (n)) < (stack - 8))  error(ERR_STACK_OVERFLOW); } while (0)
 #define VM_STACK_CHK_UP(n)  do { if ((sp + (n)) > stack_end)  fatal(FATAL_ERR_STACK_UNDERFLOW); } while (0)
 
 
@@ -901,23 +857,23 @@ vm_pushl(obj_t obj)
 void
 vm_push(unsigned src)
 {
-    ASSERT(src < ARRAY_SIZE(regs));
+  HARD_ASSERT(src < ARRAY_SIZE(regs));
 
-    vm_pushl(regs[src]);
+  vm_pushl(regs[src]);
 }
 
 void
 vm_pushm(unsigned src, unsigned n)
 {
-    obj_t *p;
-
-    ASSERT((src + n) <= ARRAY_SIZE(regs));
-
-    VM_STACK_CHK_DN(n);
-
-    VM_STATS_UPDATE_PUSH(n);
-
-    for (p = &regs[src]; n; --n, ++p)  *--sp = obj_retain(*p);
+  obj_t *p;
+  
+  HARD_ASSERT((src + n) <= ARRAY_SIZE(regs));
+  
+  VM_STACK_CHK_DN(n);
+  
+  VM_STATS_UPDATE_PUSH(n);
+  
+  for (p = &regs[src]; n; --n, ++p)  *--sp = obj_retain(*p);
 }
 
 void
@@ -991,14 +947,14 @@ bt_print(obj_t outf)
     case FRAME_TYPE_METHOD_CALL:
       fprintf(fp, "[");
       if (q = FRAME_METHOD_CALL(p)->cl) {
-	vm_method_call_2(consts.str.printc, q, outf);
+	m_method_call_2(consts.str.printc, q, outf);
       } else {
 	fprintf(fp, "<none>");
       }
       fprintf(fp, " ");
-      vm_method_call_2(consts.str.printc, FRAME_METHOD_CALL(p)->sel, outf);
+      m_method_call_2(consts.str.printc, FRAME_METHOD_CALL(p)->sel, outf);
       fprintf(fp, "] ");
-      vm_method_call_2(consts.str.printc, FRAME_METHOD_CALL(p)->args, outf);
+      m_method_call_2(consts.str.printc, FRAME_METHOD_CALL(p)->args, outf);
       fprintf(fp, "\n");
       break;
       
@@ -1023,7 +979,7 @@ error(enum errcode errcode, ...)
 
     vm_push(0);
 
-    vm_method_call_1(consts.str._stderr, consts.cl.file);
+    m_method_call_1(consts.str._stderr, consts.cl.file);
     if (!is_kind_of(R0, consts.cl.file)) {
 	fatal(FATAL_ERR_BAD_ERR_STREAM);
     }
@@ -1040,22 +996,22 @@ error(enum errcode errcode, ...)
     case ERR_SYM_NOT_BOUND:
 	fprintf(fp, "Symbol not bound: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_NO_METHOD:
 	fprintf(fp, "No such method: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_INVALID_METHOD:
 	fprintf(fp, "Invalid method: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_INVALID_ARG:
 	fprintf(fp, "Invalid argument: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_INVALID_VALUE_1:
 	{
@@ -1064,16 +1020,16 @@ error(enum errcode errcode, ...)
 	    s    = va_arg(ap, char *);
 	    obj  = va_arg(ap, obj_t);
 	    fprintf(fp, "Invalid value for %s: ", s);
-	    vm_method_call_2(consts.str.printc, obj, outf);
+	    m_method_call_2(consts.str.printc, obj, outf);
 	}
 	break;
     case ERR_INVALID_VALUE_2:
       obj  = va_arg(ap, obj_t);
       fprintf(fp, "Invalid value for ");
-      vm_method_call_2(consts.str.printc, obj, outf);
+      m_method_call_2(consts.str.printc, obj, outf);
       obj = va_arg(ap, obj_t);
       fprintf(fp, ": ");
-      vm_method_call_2(consts.str.printc, obj, outf);
+      m_method_call_2(consts.str.printc, obj, outf);
       break;
     case ERR_NUM_ARGS:
 	fprintf(fp, "Incorrect number of arguments");
@@ -1081,15 +1037,15 @@ error(enum errcode errcode, ...)
     case ERR_IDX_RANGE:
 	fprintf(fp, "Index out of range: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_IDX_RANGE_2:
 	fprintf(fp, "Indices out of range: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	fprintf(fp, ", ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_BREAK:
 	fprintf(fp, "break not within while:");
@@ -1107,7 +1063,7 @@ error(enum errcode errcode, ...)
 	    obj    = va_arg(ap, obj_t);
 	    errnum = va_arg(ap, int);
 	    fprintf(fp, "File open failed (%s): ", strerror(errnum));
-	    vm_method_call_2(consts.str.printc, obj, outf);
+	    m_method_call_2(consts.str.printc, obj, outf);
 	}
 	
 	break;
@@ -1118,14 +1074,14 @@ error(enum errcode errcode, ...)
 	    obj    = va_arg(ap, obj_t);
 	    errnum = va_arg(ap, int);
 	    fprintf(fp, "Module load failed (%s): ", strerror(errnum));
-	    vm_method_call_2(consts.str.printc, obj, outf);
+	    m_method_call_2(consts.str.printc, obj, outf);
 	}
 	
 	break;
     case ERR_MODULE_MEMBER:
 	fprintf(fp, "No module member: ");
 	obj = va_arg(ap, obj_t);
-	vm_method_call_2(consts.str.printc, obj, outf);
+	m_method_call_2(consts.str.printc, obj, outf);
 	break;
     case ERR_CONST:
 	fprintf(fp, "Attempt to write constant");
@@ -1176,7 +1132,7 @@ method_run(obj_t cl, obj_t func, unsigned argc, obj_t args)
   }
   
   if (is_kind_of(func, consts.cl.block)) {
-    vm_method_call_2(consts.str.evalc, func, args);
+    m_method_call_2(consts.str.evalc, func, args);
     goto done;
   }
   
@@ -1204,7 +1160,7 @@ method_call(obj_t sel, unsigned argc, obj_t args)
   }
   
   cl = inst_of(recvr);
-  if (recvr == consts.cl.metaclass || cl == consts.cl.metaclass) {
+  if (cl == NIL || cl == consts.cl.metaclass) {
     for (cl = recvr; cl; cl = CLASS(cl)->parent) {
       obj_t obj;
       
@@ -1241,7 +1197,7 @@ method_call(obj_t sel, unsigned argc, obj_t args)
       if (sel_with_colon) {
 	if (STRING(R1)->data[0] == '#')  error(ERR_CONST);
 	
-	obj_assign(p, CAR(CDR(args)));
+	OBJ_ASSIGN(*p, CAR(CDR(args)));
       }
       vm_assign(0, *p);
       goto done;
@@ -1261,7 +1217,7 @@ m_method_call_1(obj_t sel, obj_t recvr)
   vm_push(0);
 
   vm_pushl(sel);
-  m_cons(consts.cl.list, recvr, NIL);
+  m_cons(recvr, NIL);
   vm_push(0);
   
   method_call(sel, 1, R0);
@@ -1275,8 +1231,8 @@ m_method_call_2(obj_t sel, obj_t recvr, obj_t arg)
   vm_push(0);
   
   vm_pushl(sel);
-  m_cons(consts.cl.list, arg, NIL);
-  m_cons(consts.cl.list, recvr, R0);
+  m_cons(arg, NIL);
+  m_cons(recvr, R0);
   vm_push(0);
   
   method_call(sel, 2, R0);
@@ -1290,9 +1246,9 @@ m_method_call_3(obj_t sel, obj_t recvr, obj_t arg1, obj_t arg2)
   vm_push(0);
   
   vm_pushl(sel);
-  m_cons(consts.cl.list, arg2, NIL);
-  m_cons(consts.cl.list, arg1, R0);
-  m_cons(consts.cl.list, recvr, R0);
+  m_cons(arg2, NIL);
+  m_cons(arg1, R0);
+  m_cons(recvr, R0);
   vm_push(0);
   
   method_call(sel, 3, R0);
@@ -1302,31 +1258,35 @@ m_method_call_3(obj_t sel, obj_t recvr, obj_t arg1, obj_t arg2)
 
 /***************************************************************************/
 
-#define CRC32_INIT(crc)  ((crc) = 0xffffffff)
+unsigned crc_val;
 
 void
-crc32(unsigned *pcrc, unsigned char *p, unsigned n)
+crc32_init(void)
+{
+  crc_val = ~0;
+}
+
+unsigned
+crc32(unsigned char *p, unsigned n)
 {
 #define CRC_POLY 0xEDB88320
 
-    unsigned crc, k;
+    unsigned k;
 
-    for (crc = *pcrc; n; --n, ++p) {
-	crc ^= *p;
+    for (; n; --n, ++p) {
+	crc_val ^= *p;
 	
 	for (k = 8; k; --k) {
-	    if (crc & 1) {
-		crc = (crc >> 1) ^ CRC_POLY;
+	    if (crc_val & 1) {
+		crc_val = (crc_val >> 1) ^ CRC_POLY;
 	    } else {
-		crc >>= 1;
+		crc_val >>= 1;
 	    }
 	}
     }
 
-    *pcrc = crc;
+    return (crc_val);
 }
-
-#define CRC32(r, p, n)  (crc32(&(r), (unsigned char *)(p), (n)))
 
 /***************************************************************************
 
@@ -1334,12 +1294,11 @@ Object hiearchies
 
 Instance-of
 
-  Object
-    Metaclass
-      Object
-      Boolean
-      Integer
-      ...
+  Metaclass
+    Object
+    Boolean
+    Integer
+    ...
 
 Parent
 
@@ -1349,10 +1308,8 @@ Parent
     Integer
     ...
 
-
 Known reference loops include:
-  inst_of(parent(#Metaclass) == #Metaclass
-  inst_of(inst_of(#Metaclass)) == #Metaclass
+  inst_of(parent(#Metaclass)) == #Metaclass
   inst_of(name(#String)) == #String
 
 ***************************************************************************/
@@ -1434,12 +1391,12 @@ cm_meta_metaclass_inst_vars(unsigned argc, obj_t args)
      inst_vars(#Metaclass) only has mutable ones
   */
   
-  m_cons(consts.cl.list, consts.str.instance_variables, NIL);
-  m_cons(consts.cl.list, consts.str.instance_methods, R0);
-  m_cons(consts.cl.list, consts.str.class_variables, R0);
-  m_cons(consts.cl.list, consts.str.class_methods, R0);
-  m_cons(consts.cl.list, consts.str.parent, R0);
-  m_cons(consts.cl.list, consts.str.name, R0);
+  m_cons(consts.str.instance_variables, NIL);
+  m_cons(consts.str.instance_methods, R0);
+  m_cons(consts.str.class_variables, R0);
+  m_cons(consts.str.class_methods, R0);
+  m_cons(consts.str.parent, R0);
+  m_cons(consts.str.name, R0);
 }
 
 /***************************************************************************/
@@ -2060,12 +2017,8 @@ inst_init_integer(obj_t cl, obj_t inst, va_list ap)
 void
 m_integer_new(integer_val_t val)
 {
-  vm_push(0);
-
   m_inst_alloc(consts.cl.integer);
   inst_init(R0, val);
-
-  vm_drop();
 }
 
 void
@@ -2379,8 +2332,8 @@ m_integer_range(integer_val_t init, integer_val_t lim, integer_val_t step)
     vm_assign(1, NIL);
     for (p = &R1, val = init; val < lim; val += step) {
       m_integer_new(val);
-      m_cons(consts.cl.list, R0, NIL);
-      obj_assign(p, R0);
+      m_cons(R0, NIL);
+      OBJ_ASSIGN(*p, R0);
       p = &CDR(R0);
     }
     vm_assign(0, R1);
@@ -3046,10 +2999,10 @@ cm_string_foreach(unsigned argc, obj_t args)
   vm_assign(1, NIL);
   for (p = &R1, s = STRING(recvr)->data, n = STRING(recvr)->size; n; --n, ++s) {
     m_string_new(1, 1, s);
-    m_cons(consts.cl.list, R0, NIL);
+    m_cons(R0, NIL);
     m_method_call_2(consts.str.evalc, arg, R0);
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(p, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
   }
   vm_assign(0, R1);
@@ -3118,8 +3071,8 @@ cm_string_split(unsigned argc, obj_t args)
     unsigned n = (i < 0) ? STRING(recvr)->size - ofs : (unsigned) i - ofs;
     
     m_string_new(1, n, STRING(recvr)->data + ofs);
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(p, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
     ofs += n + 1;
   }
@@ -3140,7 +3093,7 @@ read_eval(void)
 
         if (rc != 0) break;
 
-        vm_method_call_1(consts.str.eval, R0);
+        m_method_call_1(consts.str.eval, R0);
     }
 }
 
@@ -3295,7 +3248,7 @@ cm_pair_new(unsigned argc, obj_t args)
     }
   }
 
-  m_cons(consts.cl.pair, car, cdr);
+  m_pair_new(car, cdr);
 }
 
 void
@@ -3312,7 +3265,7 @@ cm_pair_eval(unsigned argc, obj_t args)
   m_method_call_1(consts.str.eval, CAR(recvr));
   vm_assign(1, R0);
   m_method_call_1(consts.str.eval, CDR(recvr));
-  m_cons(consts.cl.pair, R1, R0);
+  m_pair_new(R1, R0);
   
   vm_pop(1);
 }
@@ -3398,8 +3351,8 @@ cm_list_new(unsigned argc, obj_t args)
   arg = CAR(args);
 
   if (is_kind_of(arg, consts.cl.pair)) {
-    m_cons(consts.cl.list, CDR(arg), NIL);
-    m_cons(consts.cl.list, CAR(arg), R0);
+    m_cons(CDR(arg), NIL);
+    m_cons(CAR(arg), R0);
 
     return;
   }
@@ -3416,8 +3369,8 @@ cm_list_new(unsigned argc, obj_t args)
     
     vm_assign(1, NIL);
     for (p = &R1, q = ARRAY(arg)->data, n = ARRAY(arg)->size; n; --n, ++q) {
-      m_cons(consts.cl.list, *q, NIL);
-      obj_assign(p, R0);
+      m_cons(*q, NIL);
+      OBJ_ASSIGN(*p, R0);
       p = &CDR(R0);
     }
     vm_assign(0, R1);
@@ -3435,8 +3388,8 @@ cm_list_new(unsigned argc, obj_t args)
     vm_assign(1, NIL);
     for (p = &R1, q = DICT(arg)->base.data, n = DICT(arg)->base.size; n; --n, ++q) {
       for (r = *q; r; r = CDR(r)) {
-	m_cons(consts.cl.list, CAR(r), NIL);
-	obj_assign(p, R0);
+	m_cons(CAR(r), NIL);
+	OBJ_ASSIGN(*p, R0);
 	p = &CDR(R0);
       }
     }
@@ -3476,7 +3429,7 @@ m_list_concat(obj_t list, obj_t obj)
 {
     vm_push(0);
 
-    m_cons(consts.cl.list, obj, NIL);
+    m_cons(obj, NIL);
     _list_concat(list, R0);
 
     vm_pop(0);
@@ -3531,8 +3484,8 @@ m_list_eval(obj_t list)
   vm_assign(1, NIL);
   for (q = &R1; list; list = CDR(list)) {
     m_method_call_1(consts.str.eval, CAR(list));
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(q, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*q, R0);
     q = &CDR(R0);
   }
   vm_assign(0, R1);
@@ -3568,8 +3521,8 @@ cm_list_map(unsigned argc, obj_t args)
   vm_assign(1, NIL);
   for (p = &R1, q = recvr; q; q = CDR(q)) {
     m_method_call_2(consts.str.evalc, arg, CAR(q));
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(p, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
   }
   vm_assign(0, R1);
@@ -3591,10 +3544,10 @@ cm_list_foreach(unsigned argc, obj_t args)
 
   vm_assign(1, NIL);
   for (p = &R1, q = recvr; q; q = CDR(q)) {
-    m_cons(consts.cl.list, CAR(q), NIL);
+    m_cons(CAR(q), NIL);
     m_method_call_2(consts.str.evalc, arg, R0);
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(p, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
   }
   vm_assign(0, R1);
@@ -3647,11 +3600,11 @@ cm_list_append(unsigned argc, obj_t args)
   
   vm_assign(1, NIL);
   for (p = &R1, q = recvr; q; q = CDR(q)) {
-    m_cons(consts.cl.list, CAR(q), NIL);
-    obj_assign(p, R0);
+    m_cons(CAR(q), NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
   }
-  obj_assign(p, arg);
+  OBJ_ASSIGN(*p, arg);
   vm_assign(0, R1);
   
   vm_pop(1);
@@ -3671,8 +3624,8 @@ cm_list_hash(unsigned argc, obj_t args)
   m_integer_new(0);
   vm_assign(1, R0);
   for ( ; recvr; recvr = CDR(recvr)) {
-    vm_method_call_1(consts.str.hash, CAR(recvr));
-    vm_method_call_2(consts.str.addc, R1, R0); /* TBD: Or call directly? */
+    m_method_call_1(consts.str.hash, CAR(recvr));
+    m_method_call_2(consts.str.addc, R1, R0); /* TBD: Or call directly? */
     vm_assign(1, R0);
   }
   vm_assign(0, R1);
@@ -3698,8 +3651,8 @@ cm_list_equals(unsigned argc, obj_t args)
 	BOOLEAN(R1)->val && recvr && arg;
 	recvr = CDR(recvr), arg = CDR(arg)
 	) {
-    vm_method_call_2(consts.str.equalsc, CAR(recvr), CAR(arg));
-    vm_method_call_2(consts.str.andc, R1, R0); /* TBD: Or call directly? */
+    m_method_call_2(consts.str.equalsc, CAR(recvr), CAR(arg));
+    m_method_call_2(consts.str.andc, R1, R0); /* TBD: Or call directly? */
     vm_assign(1, R0);
   }
   if (recvr || arg)  vm_assign(1, consts.bool._false);
@@ -3760,8 +3713,8 @@ cm_list_at_len(unsigned argc, obj_t args)
   vm_assign(1, NIL);
   for (q = &R1, p = recvr; p && n; p = CDR(p)) {
     if (i == 0) {
-      m_cons(consts.cl.list, CAR(p), NIL);
-      obj_assign(q, R0);
+      m_cons(CAR(p), NIL);
+      OBJ_ASSIGN(*q, R0);
       q = &CDR(R0);
       --n;
     } else {
@@ -3793,8 +3746,8 @@ cm_list_filter(unsigned argc, obj_t args)
     if (!is_kind_of(f, consts.cl.boolean))  error(ERR_INVALID_ARG, arg);
     if (!BOOLEAN(f)->val)  continue;
     
-    m_cons(consts.cl.list, CAR(recvr), NIL);
-    obj_assign(p, R0);
+    m_cons(CAR(recvr), NIL);
+    OBJ_ASSIGN(*p, R0);
     p = &CDR(R0);
   }
   vm_assign(0, R1);
@@ -3816,9 +3769,9 @@ cm_list_reduce(unsigned argc, obj_t args)
   
   vm_assign(1, CAR(args));
   for (p = recvr; p; p = CDR(p)) {
-    m_cons(consts.cl.list, CAR(p), NIL);
-    m_cons(consts.cl.list, R1, R0);
-    vm_method_call_2(consts.str.evalc, func, R0);
+    m_cons(CAR(p), NIL);
+    m_cons(R1, R0);
+    m_method_call_2(consts.str.evalc, func, R0);
     vm_assign(1, R0);
   }
   vm_assign(0, R1);
@@ -3920,8 +3873,8 @@ cm_method_call_eval(unsigned argc, obj_t args)
     
     vm_assign(0, CAR(p));
     if (!quotef)  m_method_call_1(consts.str.eval, R0);
-    m_cons(consts.cl.list, R0, NIL);
-    obj_assign(q, R0);
+    m_cons(R0, NIL);
+    OBJ_ASSIGN(*q, R0);
     q = &CDR(R0);
   }
     
@@ -4098,7 +4051,7 @@ cm_array_new(unsigned argc, obj_t args)
     
     m_array_new(list_len(arg));
     for (p = ARRAY(R0)->data, n = ARRAY(R0)->size; n; --n, ++p, arg = CDR(arg)) {
-      obj_assign(p, CAR(arg));
+      OBJ_ASSIGN(*p, CAR(arg));
     }
     return;
   }
@@ -4111,7 +4064,7 @@ cm_array_new(unsigned argc, obj_t args)
 	 n;
 	 --n, ++p, ++q
 	 ) {
-      obj_assign(p, *q);
+      OBJ_ASSIGN(*p, *q);
     }
     return;
   }
@@ -4125,7 +4078,7 @@ cm_array_new(unsigned argc, obj_t args)
 	 --n, ++q
 	 ) {
       for (r = *q; r; r = CDR(r)) {
-	obj_assign(p, CAR(r));
+	OBJ_ASSIGN(*p, CAR(r));
 	++p;
       }
     }
@@ -4232,7 +4185,7 @@ m_dict_key_hash_default(obj_t k)
 
   vm_push(0);
   
-  vm_method_call_1(consts.str.hash, k);
+  m_method_call_1(consts.str.hash, k);
   result = (unsigned) INTEGER(R0)->val;
 
   vm_pop(0);
@@ -4247,7 +4200,7 @@ m_dict_key_eq_default(obj_t k1, obj_t k2)
   
   vm_push(0);
   
-  vm_method_call_2(consts.str.equalsc, k1, k2);
+  m_method_call_2(consts.str.equalsc, k1, k2);
   result = BOOLEAN(R0)->val;
 
   vm_pop(0);
@@ -4386,9 +4339,9 @@ dict_at_put(obj_t dict, obj_t key, obj_t val)
     } else {
       vm_push(0);
       
-      m_cons(consts.cl.pair, key, val);
-      m_cons(consts.cl.list, R0, *pp);
-      obj_assign(pp, R0);
+      m_pair_new(key, val);
+      m_cons(R0, *pp);
+      OBJ_ASSIGN(*pp, R0);
 
       vm_pop(0);
     }
@@ -4420,7 +4373,7 @@ dict_del(obj_t dict, obj_t key)
     vm_push(1);
 
     vm_assign(1, p);
-    obj_assign(pp, CDR(p));
+    OBJ_ASSIGN(*pp, CDR(p));
 
     vm_pop(1);
 }
@@ -4452,8 +4405,8 @@ m_dict_keys(obj_t dict)
     vm_assign(1, NIL);
     for (p = &R1, q = DICT(dict)->base.data, n = DICT(dict)->base.size; n; --n, ++q) {
         for (r = *q; r; r = CDR(r)) {
-            m_cons(consts.cl.list, CAR(CAR(r)), NIL);
-            obj_assign(p, R0);
+            m_cons(CAR(CAR(r)), NIL);
+            OBJ_ASSIGN(*p, R0);
             p = &CDR(R0);
         }
     }
@@ -4576,7 +4529,7 @@ cm_env_del(unsigned argc, obj_t args)
 
 extern int yydebug, yy_flex_debug;
 
-#ifdef DEBUG
+#ifndef NDEBUG
 
 void
 cm_system_debug(unsigned argc, obj_t args)
@@ -5133,7 +5086,7 @@ const struct init_cl init_cl_tbl[] = {
       inst_free_file
     },
     { &consts.cl.module,
-      &consts.cl.object,
+      &consts.cl.dict,
       &consts.str.Module,
       sizeof(struct inst_module),
       inst_init_module,
@@ -5248,7 +5201,7 @@ const struct init_str init_str_tbl[] = {
     { &consts.str._true,       "#true" },
     { &consts.str.whilec,      "while:" },
     { &consts.str.xorc,        "xor:" }
-#ifdef DEBUG
+#ifndef NDEBUG
     ,
     { &consts.str.assert,      "assert" },
     { &consts.str.collect,     "collect" },
@@ -5283,7 +5236,7 @@ const struct init_method init_cl_method_tbl[] = {
     { &consts.cl.env,         &consts.str.atc,      cm_env_at },
     { &consts.cl.env,         &consts.str.atc_putc, cm_env_at_put },
     { &consts.cl.env,         &consts.str.deletec,  cm_env_del }
-#ifdef DEBUG
+#ifndef NDEBUG
     ,
     { &consts.cl.system,      &consts.str.collect,  cm_system_collect },
     { &consts.cl.system,      &consts.str.debugc,   cm_system_debug }
@@ -5395,7 +5348,7 @@ const struct init_method init_inst_method_tbl[] = {
     { &consts.cl.file,        &consts.str.readln,     cm_file_readln },
     { &consts.cl.file,        &consts.str.load,       cm_file_load },
     { &consts.cl.module,      &consts.str.atc,        cm_module_at }
-#ifdef DEBUG
+#ifndef NDEBUG
     ,
     { &consts.cl.boolean,     &consts.str.assert,     cm_boolean_assert }
 #endif
@@ -5419,7 +5372,7 @@ init_cls(const struct init_cl *tbl, unsigned n)
       m_class_new(*tbl->pname, *tbl->pparent, tbl->inst_size,
 		  *tbl->inst_init, *tbl->inst_walk, *tbl->inst_free
 		  );
-      obj_assign(tbl->pcl, R0);
+      OBJ_ASSIGN(*tbl->pcl, R0);
     }
 
     vm_pop(0);
@@ -5432,7 +5385,7 @@ init_strs(const struct init_str *tbl, unsigned n)
 
     for ( ; n; --n, ++tbl) {
       m_string_new(1, strlen(tbl->str), (char *) tbl->str);
-      obj_assign(tbl->pobj, R0);
+      OBJ_ASSIGN(*tbl->pobj, R0);
     }
 
     vm_pop(0);
@@ -5510,16 +5463,12 @@ env_init(void)
 
     for (i = 0; i < ARRAY_SIZE(init_cl_tbl); ++i) {
         m_inst_alloc(consts.cl.metaclass);
-        obj_assign(init_cl_tbl[i].pcl, R0);
+        OBJ_ASSIGN(*init_cl_tbl[i].pcl, R0);
         CLASS(*init_cl_tbl[i].pcl)->inst_size = init_cl_tbl[i].inst_size;
         CLASS(*init_cl_tbl[i].pcl)->inst_init = init_cl_tbl[i].inst_init;
         CLASS(*init_cl_tbl[i].pcl)->inst_walk = init_cl_tbl[i].inst_walk;
         CLASS(*init_cl_tbl[i].pcl)->inst_free = init_cl_tbl[i].inst_free;
     }
-
-    /* Step 3.  Fix up Metaclass */
-
-    OBJ_ASSIGN(consts.cl.metaclass->inst_of, consts.cl.object);
 
     /* Step 10.  Fix up classes, part 1 - parentage */
 
@@ -5599,7 +5548,7 @@ env_init(void)
     dict_at_put(CLASS(consts.cl.file)->cl_vars, consts.str._stderr, R0);
 
     m_string_new(1, 1, ".");
-    m_cons(consts.cl.list, R0, NIL);
+    m_cons(R0, NIL);
     dict_at_put(CLASS(consts.cl.module)->cl_vars, consts.str.path, R0);
 }
 
@@ -5622,7 +5571,7 @@ yyerror(void)
     return (0);
 }
 
-#ifdef DEBUG
+#ifndef NDEBUG
 
 void
 mem_check(void)
@@ -5645,7 +5594,7 @@ mem_check(void)
 void
 fini(void)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
     {
         if (sp != stack_end)  printf("!!! Stack not empty!\n");
     }
@@ -5673,8 +5622,8 @@ interactive(void)
 
 	vm_dropn(stack_end - sp); /* Discard all objs created during parsing */
 
-        vm_method_call_1(consts.str.eval, R0);
-        vm_method_call_1(consts.str.print, R0);
+        m_method_call_1(consts.str.eval, R0);
+        m_method_call_1(consts.str.print, R0);
     }
 
   } FRAME_RESTART_END;
@@ -5691,8 +5640,8 @@ file_run(char *filename)
       m_string_new(1, strlen(filename), filename);
       vm_assign(1, R0);
       m_string_new(1, 2, "r+");
-      vm_method_call_3(consts.str.newc_modec, consts.cl.file, R1, R0);
-      vm_method_call_1(consts.str.load, R0);
+      m_method_call_3(consts.str.newc_modec, consts.cl.file, R1, R0);
+      m_method_call_1(consts.str.load, R0);
     }
 
   } FRAME_RESTART_END;

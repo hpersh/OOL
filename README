@@ -1,5 +1,8 @@
 * TODO
 
+- strings include \0 terminator
+
+
 - expose alists?
 - goto for blocks?
 - need to distinguish current module to add to vs. current module running (i.e. method running -> class -> module)
